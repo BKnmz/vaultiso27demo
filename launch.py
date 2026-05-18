@@ -27,7 +27,7 @@ logging.basicConfig(
 )
 log = logging.getLogger("launcher")
 VENV_PYTHON = BASE_DIR / ".venv" / "Scripts" / "python.exe"
-PORT = 8501
+PORT = 8502
 
 
 def check_python():

@@ -43,8 +43,8 @@ def _render_sidebar(page: str, pending_count: int, cfg: dict) -> None:
     <div class="sidebar-brand">
       <div class="brand-mark">V</div>
       <div>
-        <div class="brand-name">VaultISO27</div>
-        <div class="brand-sub">ISO 27001:2022</div>
+        <div class="brand-name">VaultISO27 Demo</div>
+        <div class="brand-sub">ISO 27001:2022 · 5-clause edition</div>
       </div>
     </div>
     <div class="nav-label">Main</div>
@@ -100,7 +100,7 @@ def _route(page: str) -> None:
 
 def main() -> None:
     st.set_page_config(
-        page_title="VaultISO27",
+        page_title="VaultISO27 Demo",
         page_icon="V",
         layout="wide",
         initial_sidebar_state="expanded",
