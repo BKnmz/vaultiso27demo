@@ -1,43 +1,57 @@
 # VaultISO27 — Demo
 
-> **5-clause demo edition** of [VaultISO27](https://github.com/BKnmz/VaultISO27) — on-premises ISO 27001:2022 ISMS document generator.
+> **5-clause demo edition** of [VaultISO27](https://github.com/BKnmz/VaultISO27) — on-premises ISO 27001:2022 ISMS document generator. No cloud. No SaaS. Your data never leaves your machine.
 
-This demo generates documents for **5 mandatory clauses** (4.1, 4.3, 5.2, 6.1, 8.2) using a stripped RAG checklist. No cloud APIs. Runs 100% locally via Ollama.
+Generates documents for **5 mandatory clauses** (4.1, 4.3, 5.2, 6.1, 8.2) using local LLMs via Ollama + ChromaDB RAG.
+
+---
+
+## Why on-premises?
+
+- **Zero cloud exposure** — all LLM inference runs locally via Ollama; no API keys, no data upload
+- **Hardware-aware** — tool detects your RAM and VRAM on startup and recommends the right model for your machine
+- **Offline after setup** — first run downloads models (~3 GB); after that, fully air-gapped operation
+- **SME-friendly** — no DevOps required; one-click `install.bat` + `launch.bat`
+
+---
+
+## Hardware detection & model guide
+
+At launch the tool reads your hardware profile and recommends the best model:
+
+| Hardware | Recommended model | Speed |
+|----------|------------------|-------|
+| 2 GB VRAM (e.g. MX230) | `phi4-mini:3.8b-q4_K_M` | ~15 tok/s |
+| 2 GB VRAM (reviewer) | `qwen2.5:1.5b` | ~30 tok/s |
+| 4 GB+ VRAM | `llama3.2:3b-q4_K_M` | ~18 tok/s |
+| 8 GB+ VRAM | `mistral:7b-q4_K_M` | ~8 tok/s |
+
+Only one model runs at a time (VRAM limit). The **Settings → Model Guide** tab shows your detected tier and hardware specs.
 
 ---
 
 ## Screenshots
 
-> **To add screenshots:** take them while the tool is running, save as `.png` into `docs/screenshots/`, then commit. Suggested filenames below.
+> **To add screenshots:** save `.png` files into `docs/screenshots/` and commit.
 
 ### Dashboard — progress tracker
-
-<!-- Save as docs/screenshots/dashboard.png -->
-<!-- Capture: the stepper + clause status table showing generated/approved/pending pills -->
+<!-- docs/screenshots/dashboard.png — stepper + clause status pills -->
 ![Dashboard](docs/screenshots/dashboard.png)
 
 ### Generate — live document generation
-
-<!-- Save as docs/screenshots/generate.png -->
-<!-- Capture: the Generate tab mid-run, showing the live log stream and progress bar -->
+<!-- docs/screenshots/generate.png — Generate tab mid-run, live log stream -->
 ![Generate](docs/screenshots/generate.png)
 
 ### Review — AI Reviewer findings
-
-<!-- Save as docs/screenshots/review.png -->
-<!-- Capture: Review tab with a clause selected, showing PASS/FAIL pill task list and the Approve / Flag buttons -->
+<!-- docs/screenshots/review.png — PASS/FAIL pill task list, Approve/Flag buttons -->
 ![Review](docs/screenshots/review.png)
 
 ### Documents — export centre
-
-<!-- Save as docs/screenshots/documents.png -->
-<!-- Capture: Documents tab listing all 5 generated clauses with Word download buttons visible -->
+<!-- docs/screenshots/documents.png — clause list with Word download buttons -->
 ![Documents](docs/screenshots/documents.png)
 
 ### Annex A — evidence tracker
-
-<!-- Save as docs/screenshots/annex_a.png -->
-<!-- Capture: Annex A tab with a few controls filled in (applicable toggle + status + justification) -->
+<!-- docs/screenshots/annex_a.png — controls with applicable toggle + status -->
 ![Annex A](docs/screenshots/annex_a.png)
 
 ---
@@ -45,11 +59,9 @@ This demo generates documents for **5 mandatory clauses** (4.1, 4.3, 5.2, 6.1, 8
 ## Quick Start
 
 ```bat
-install.bat      :: one-time setup (run from project folder, needs internet first time)
-launch.bat       :: start dashboard
+install.bat      :: one-time setup (needs internet for model download)
+launch.bat       :: start dashboard — open http://localhost:8501
 ```
-
-Open **http://localhost:8501** in your browser.
 
 ---
 
@@ -57,17 +69,8 @@ Open **http://localhost:8501** in your browser.
 
 - Windows 10/11
 - Python 3.9+
-- [Ollama](https://ollama.com/) installed and running
-- ~4 GB free disk space (models + dependencies)
-
-### Models used
-
-| Role | Model | Size |
-|------|-------|------|
-| Generator | `phi4-mini:3.8b-q4_K_M` | ~2.5 GB |
-| AI Reviewer | `qwen2.5:1.5b` | ~1 GB |
-
-Models are downloaded automatically by `install.bat`.
+- [Ollama](https://ollama.com/) installed
+- ~4 GB free disk (models + deps)
 
 ---
 
@@ -81,18 +84,18 @@ Models are downloaded automatically by `install.bat`.
 | 6.1 | Risk Planning |
 | 8.2 | Risk Assessment |
 
-For the full 23-clause tool, see [BKnmz/VaultISO27](https://github.com/BKnmz/VaultISO27).
+Full 23-clause tool → [BKnmz/VaultISO27](https://github.com/BKnmz/VaultISO27)
 
 ---
 
 ## Workflow
 
 ```
-Step 1 — Settings    Fill in your organization profile (name, sector, locations, etc.)
-Step 2 — Generate    Run the pipeline; phi4-mini drafts each clause from your profile + RAG
-Step 3 — Review      AI Reviewer scores each draft; approve or flag for revision
-Documents            Export any clause to Word (.docx) or download all as a zip
-Annex A              Track evidence for each ISO 27001:2022 control; export SoA to Excel
+Step 1 — Settings    Fill in org profile (name, sector, locations, departments)
+Step 2 — Generate    Pipeline drafts each clause via phi4-mini + RAG context
+Step 3 — Review      AI Reviewer scores draft; approve or flag for revision
+Documents            Export to Word (.docx) or download all as zip
+Annex A              Track evidence per ISO 27001:2022 control; export SoA to Excel
 ```
 
 ---
@@ -100,10 +103,10 @@ Annex A              Track evidence for each ISO 27001:2022 control; export SoA 
 ## Architecture
 
 ```
-organization_data.json  →  Jinja2 skill template  →  phi4-mini (Ollama)
-                       +  RAG context (ChromaDB)  →  .md document
-                                                   →  AI Reviewer (qwen2.5)
-                                                   →  Word / Excel export
+org profile + RAG (ChromaDB)  →  Jinja2 skill template  →  phi4-mini (Ollama)
+                                                         →  .md document
+                                                         →  qwen2.5 AI Reviewer
+                                                         →  Word / Excel export
 ```
 
-All data stays on your machine. Zero cloud calls after first-time model download.
+All inference local. All data local. Zero telemetry.
