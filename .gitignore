@@ -1,0 +1,28 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# VaultISO27 runtime
+rag/chroma_db/
+outputs/
+logs/
+inputs/organization_data.json
+
+# Secrets
+*.env
+.env.*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude / IDE
+.claude/
+.codegraph/
+CLAUDE.md
+plan.md

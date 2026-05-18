@@ -1,0 +1,45 @@
+critic:
+  auto_clauses:
+  - '4.1'
+  - '4.3'
+  - '5.2'
+  - '6.1'
+  - '8.2'
+  enabled: true
+  max_revisions: 2
+  model: qwen2.5:1.5b
+  temperature: 0.1
+export:
+  export_tables_to_excel: true
+  version_history_cap: 5
+github:
+  folder: isms-docs/
+  repo: ''
+  token: ''
+llm:
+  base_url: http://localhost:11434
+  model: phi4-mini:3.8b-q4_K_M
+  num_gpu: 1
+  temperature: 0.3
+paths:
+  inputs: inputs/organization_data.json
+  outputs: outputs/
+  skills: skills/
+pipeline:
+  clauses:
+  - '4.1'
+  - '4.3'
+  - '5.2'
+  - '6.1'
+  - '8.2'
+rag:
+  chroma_db_path: rag/chroma_db
+  collection_name: iso27001
+  source_excel: rag/ISO27001_Checklist_Demo.xlsx
+  top_k: 3
+timeouts:
+  detected_ram_gb: 16.0
+  detected_vram_gb: 2.0
+  hardware_tier: low
+  model_swap_delay: 12
+  ollama_generate: 600
