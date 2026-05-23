@@ -10,6 +10,7 @@ import re
 import subprocess
 import sys
 import time
+from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
@@ -69,6 +70,19 @@ REVIEW_RESULT = {
 
 # Clauses whose primary output is tabular — offered as .xlsx in addition to .docx
 EXCEL_EXPORT_CLAUSES = {"6.1.2", "6.1.3", "9.1", "9.2"}
+
+# Annex A controls present in the demo RAG Excel (ISO27001_Audit_Checklist_demo.xlsx).
+# Only these IDs appear in the demo Annex sheets — used to filter the Annex A tab.
+DEMO_ANNEX_CONTROLS = {
+    # A.5_Operational (8 controls)
+    "5.1", "5.2", "5.3", "5.4", "5.5", "5.6", "5.7", "5.9",
+    # A.6_People (3 controls)
+    "6.6", "6.7", "6.8",
+    # A.7_Physical (5 controls)
+    "7.1", "7.2", "7.3", "7.4", "7.5",
+    # A._Technical (5 controls)
+    "8.1", "8.2", "8.3", "8.4", "8.5",
+}
 
 MANDATORY_ORG_FIELDS = [
     ("name",              "Company name"),
@@ -197,16 +211,20 @@ ANNEX_A_STATUSES      = ["Not Assessed", "Implemented", "Partial", "Planned"]
 MODEL_GUIDE = [
     {"Model": "phi4-mini:3.8b-q4_K_M", "Best for": "Document generation (default)",
      "VRAM": "GPU+CPU split", "Speed": "~15 tok/s", "min_ram_gb": 0,
-     "Install": "ollama pull phi4-mini:3.8b-q4_K_M"},
+     "Install": "ollama pull phi4-mini:3.8b-q4_K_M",
+     "tiers": ["low", "minimal"]},
     {"Model": "qwen2.5:1.5b-q4_K_M", "Best for": "AI Reviewer (fastest)",
      "VRAM": "Fully on GPU (~1.2 GB)", "Speed": "~30 tok/s", "min_ram_gb": 0,
-     "Install": "ollama pull qwen2.5:1.5b"},
+     "Install": "ollama pull qwen2.5:1.5b",
+     "tiers": ["low", "minimal", "mid"]},
     {"Model": "llama3.2:3b-q4_K_M", "Best for": "Document generation (alternative)",
      "VRAM": "GPU+CPU split", "Speed": "~18 tok/s", "min_ram_gb": 8,
-     "Install": "ollama pull llama3.2:3b"},
+     "Install": "ollama pull llama3.2:3b",
+     "tiers": ["mid"]},
     {"Model": "mistral:7b-q4_K_M", "Best for": "High-end machines (8 GB+ VRAM)",
      "VRAM": "~5 GB VRAM needed", "Speed": "~8 tok/s", "min_ram_gb": 16,
-     "Install": "ollama pull mistral:7b"},
+     "Install": "ollama pull mistral:7b",
+     "tiers": ["high"]},
 ]
 
 
@@ -245,6 +263,23 @@ def load_config():
 def save_config(cfg):
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
         yaml.dump(cfg, f, default_flow_style=False, allow_unicode=True)
+
+
+def get_active_clauses() -> dict:
+    """Clauses enabled for this build per config.yaml pipeline.clauses.
+
+    Used by every UI page so the demo build only surfaces the clauses
+    it actually ships with (10 mandatory clauses) instead of the full 23.
+    Order follows config; unknown IDs are skipped.
+    """
+    try:
+        cfg = load_config()
+        pipe = cfg.get("pipeline", {}).get("clauses", []) or []
+    except Exception:
+        pipe = []
+    if not pipe:
+        return dict(CLAUSE_NAMES)
+    return {cid: CLAUSE_NAMES[cid] for cid in pipe if cid in CLAUSE_NAMES}
 
 def load_org():
     if not ORG_PATH.exists():
@@ -303,10 +338,11 @@ def read_output(cid):
     return f.read_text(encoding="utf-8", errors="replace") if f.exists() else None
 
 def completion_stats():
-    counts = {"APPROVED": 0, "DRAFT": 0, "REVISION": 0, "MISSING": 0}
-    for cid in CLAUSE_NAMES:
+    counts = defaultdict(int, {"APPROVED": 0, "DRAFT": 0, "REVISION": 0, "MISSING": 0})
+    active = get_active_clauses()
+    for cid in active:
         counts[get_clause_status(cid)] += 1
-    return len(CLAUSE_NAMES), counts
+    return len(active), counts
 
 def read_log_tail(n=60):
     if not LOG_FILE.exists():
@@ -853,27 +889,82 @@ def _parse_supplier_register(file_bytes: bytes) -> list:
 
 def extract_text_from_upload(uploaded_file):
     suffix = Path(uploaded_file.name).suffix.lower()
-    if suffix == ".txt":
-        return uploaded_file.read().decode("utf-8", errors="replace")
+    raw = uploaded_file.read()
+
+    if suffix in (".txt", ".md"):
+        try:
+            return raw.decode("utf-8", errors="replace")
+        except Exception as e:
+            try:
+                return raw.decode("cp1252", errors="replace")
+            except Exception:
+                st.error(f"Could not decode text file: {e}")
+                return None
+
     elif suffix == ".pdf":
         try:
             import pypdf
-            reader = pypdf.PdfReader(uploaded_file)
+            from io import BytesIO as _BytesIO
+            reader = pypdf.PdfReader(_BytesIO(raw))
             return "\n".join(p.extract_text() or "" for p in reader.pages)
         except Exception as e:
             st.error(f"Could not read PDF: {e}")
             return None
-    elif suffix in (".docx", ".doc"):
+
+    elif suffix == ".docx":
         try:
             from docx import Document as DocxDoc
-            doc = DocxDoc(uploaded_file)
+            from io import BytesIO as _BytesIO
+            doc = DocxDoc(_BytesIO(raw))
             return "\n".join(p.text for p in doc.paragraphs if p.text.strip())
         except Exception as e:
-            st.error(f"Could not read Word document: {e}")
+            st.error(f"Could not read Word document: {e}. Make sure the file is .docx (not .doc).")
             return None
-    st.error(f"File type not supported: {suffix}. Please upload a PDF, Word (.docx), or text (.txt) file.")
+
+    elif suffix == ".doc":
+        st.error(
+            "Legacy .doc files are not supported. Please save the file as .docx "
+            "(File → Save As → Word Document .docx) and re-upload."
+        )
+        return None
+
+    elif suffix in (".html", ".htm"):
+        try:
+            import lxml.html
+            tree = lxml.html.fromstring(raw)
+            # Strip style/script — their text content is CSS/JS noise, not readable text
+            for el in tree.xpath("//style | //script"):
+                parent = el.getparent()
+                if parent is not None:
+                    parent.remove(el)
+            text = tree.text_content()
+            return "\n".join(ln.strip() for ln in text.splitlines() if ln.strip())
+        except Exception as e:
+            st.error(f"Could not read HTML file: {e}")
+            return None
+
+    st.error(
+        f"File type '{suffix}' is not supported. "
+        "Please upload a PDF, Word (.docx), plain text (.txt), or HTML (.html) file."
+    )
     return None
 
+
+# Slim schema used only for LLM extraction — avoids blowing the 4096-token context window.
+# assets/stakeholders/key_personnel have dedicated upload flows; not extracted here.
+_ORG_EXTRACT_SCHEMA = {
+    "name": "",
+    "industry": "",
+    "size": "",
+    "scope": "",
+    "primary_processes": [],
+    "locations": [],
+    "departments": [],
+    "regulatory_drivers": [],
+    "legal_basis": [],
+    "existing_controls": [],
+    "certifications_existing": [],
+}
 
 ORG_JSON_SCHEMA = {
     "name": "", "industry": "", "size": "", "scope": "",
@@ -887,25 +978,25 @@ ORG_JSON_SCHEMA = {
 
 
 def extract_org_with_llm(text, cfg):
-    schema_str = json.dumps(ORG_JSON_SCHEMA, indent=2)
+    schema_str = json.dumps(_ORG_EXTRACT_SCHEMA, indent=2)
     prompt = f"""You are an ISO 27001 consultant. Extract organization information from the document below.
 
-Return ONLY a valid JSON object with this exact structure — no explanation, no markdown fences:
+Return ONLY a valid JSON object — no explanation, no markdown fences:
 
 {schema_str}
 
 Rules:
-- "scope": 1–2 sentences describing the core business and IT activities suitable for an ISMS scope statement
+- "scope": 1-2 sentences describing the core business and IT activities suitable for an ISMS scope statement
 - "size": format as "45 employees" or "~100 employees" if approximate
-- "departments": list department or team names found in the document (e.g. ["R&D", "Sales", "HR"])
-- "regulatory_drivers": regulations or standards driving ISMS (e.g. ["GDPR", "NIS2", "TISAX"])
-- "legal_basis": include only regulations explicitly mentioned in the document — do NOT invent
-- "existing_controls": list specific security controls mentioned (MFA, VPN, firewalls, encryption, etc.)
-- Leave fields as empty string or empty array when not found in the document
+- "departments": list department or team names found in the document
+- "regulatory_drivers": regulations or standards mentioned (e.g. GDPR, NIS2, TISAX)
+- "legal_basis": only regulations explicitly mentioned — do NOT invent
+- "existing_controls": security controls mentioned (MFA, VPN, firewalls, encryption, etc.)
+- Leave fields as empty string or empty array when not found
 - Do NOT invent information
 
 DOCUMENT:
-{text[:5000]}
+{text[:3000]}
 
 JSON:"""
 
@@ -920,27 +1011,46 @@ JSON:"""
         resp = requests.post(
             f"{cfg['llm']['base_url']}/api/generate",
             json={"model": cfg["llm"]["model"], "prompt": prompt, "stream": False,
-                  "options": {"temperature": 0.05, "num_predict": 1500}},
+                  "options": {"temperature": 0.05, "num_predict": 800, "num_ctx": 2048}},
             timeout=300,
         )
-        raw = resp.json().get("response", "").strip()
-        start, end = raw.find("{"), raw.rfind("}") + 1
+        if resp.status_code != 200:
+            err = resp.json().get("error", resp.text[:200])
+            st.error(f"AI engine error ({resp.status_code}): {err}")
+            return None
+        payload = resp.json()
+        if "error" in payload:
+            st.error(f"AI engine error: {payload['error']}")
+            return None
+        raw = payload.get("response", "").strip()
+        start = raw.find("{")
+        end = raw.rfind("}") + 1
         if start >= 0 and end > start:
-            return json.loads(raw[start:end])
-        st.error("The AI returned an unexpected response. "
-                 "Try uploading a shorter or plain-text (.txt) version of your document.")
+            try:
+                return json.loads(raw[start:end])
+            except json.JSONDecodeError:
+                # Truncated JSON — close any unclosed braces/brackets and retry
+                fragment = raw[start:]
+                open_sq = fragment.count("[") - fragment.count("]")
+                open_b = fragment.count("{") - fragment.count("}")
+                fragment += "]" * max(0, open_sq) + "}" * max(0, open_b)
+                try:
+                    return json.loads(fragment)
+                except json.JSONDecodeError:
+                    pass
+        # raw is empty or has no JSON — show what came back for diagnosis
+        preview = raw[:300] if raw else "(empty response)"
+        st.error(
+            "AI did not return valid JSON. Check that your model is pulled and responding correctly.  \n"
+            f"**Raw response:** `{preview}`"
+        )
     except requests.exceptions.Timeout:
         st.error(
-            "The AI engine is taking too long (3 minute limit reached). "
-            "This usually means the model is still loading into memory. "
-            "Wait 1–2 minutes, then try again — it will be faster on the second attempt."
+            "AI engine timed out (5 minute limit). Model may still be loading. "
+            "Wait 1–2 minutes and try again."
         )
     except requests.exceptions.ConnectionError:
-        st.error("Cannot reach the AI engine. "
-                 "Go to Organization > AI Engine and check that Ollama is running.")
-    except json.JSONDecodeError:
-        st.error("Unexpected AI response format. "
-                 "Try uploading a shorter or simpler document (plain text works best).")
+        st.error("Cannot reach AI engine. Check Ollama is running (`ollama serve`).")
     except Exception as e:
         st.error(f"Extraction error: {e}")
     return None
@@ -948,7 +1058,7 @@ JSON:"""
 
 def extract_personnel_with_llm(text, cfg):
     """Extract key personnel names and roles from an org chart or document."""
-    prompt = f"""You are an ISO 27001 consultant. Extract key personnel information from the document below.
+    prompt = f"""Extract named individuals relevant to an ISO 27001 Information Security Management System (ISMS) from the document below.
 
 Return ONLY a valid JSON array — no explanation, no markdown fences:
 [
@@ -956,11 +1066,17 @@ Return ONLY a valid JSON array — no explanation, no markdown fences:
   {{"role": "CISO", "name": "Full Name"}}
 ]
 
+Include these person types (in priority order):
+1. Information security roles: CISO, Information Security Manager, DPO, Risk Manager, Compliance Officer, Internal Auditor, IS Officer
+2. Top management: CEO, CTO, COO, CFO, Managing Director, General Manager, VP, Director
+3. Department or team heads who are named and in scope of ISMS operations
+
 Rules:
-- Include only named individuals with clear roles
-- Roles should map to information security governance (CEO, CISO, IT Manager, Risk Owner, DPO, etc.)
-- Return an empty array [] if no clear personnel found
-- Do NOT invent names
+- Use the exact role title from the document
+- Skip unnamed positions (e.g. "CISO (unnamed)") — do NOT invent a name
+- Skip individual contributors without management or IS responsibility
+- Return an empty array [] if no qualifying named individuals are found
+- Do NOT invent or guess names
 
 DOCUMENT:
 {text[:3000]}
@@ -970,13 +1086,17 @@ JSON:"""
         resp = requests.post(
             f"{cfg['llm']['base_url']}/api/generate",
             json={"model": cfg["llm"]["model"], "prompt": prompt, "stream": False,
-                  "options": {"temperature": 0.05, "num_predict": 300}},
+                  "options": {"temperature": 0.05, "num_predict": 800, "num_ctx": 2048}},
             timeout=120,
         )
         raw = resp.json().get("response", "").strip()
-        start, end = raw.find("["), raw.rfind("]") + 1
+        start = raw.find("[")
+        end = raw.rfind("]") + 1
         if start >= 0 and end > start:
-            return json.loads(raw[start:end])
+            try:
+                return json.loads(raw[start:end])
+            except json.JSONDecodeError:
+                return []
     except Exception as e:
         st.error(f"Personnel extraction error: {e}")
     return None

@@ -9,7 +9,7 @@ import streamlit as st
 import pandas as pd
 
 from core import (
-    MANDATORY_ORG_FIELDS, MODEL_GUIDE, CLAUSE_NAMES, ORG_JSON_SCHEMA,
+    MANDATORY_ORG_FIELDS, MODEL_GUIDE, CLAUSE_NAMES, ORG_JSON_SCHEMA, get_active_clauses,
     load_org, save_org, load_config, save_config,
     extract_text_from_upload, extract_org_with_llm, extract_personnel_with_llm,
     _parse_asset_register, _parse_supplier_register,
@@ -185,31 +185,97 @@ def _tab_profile() -> None:
     else:
         col_left, col_right = st.columns(2)
         with col_left:
-            if org.get("name"):
-                # Show existing profile summary
-                rows_html = ""
-                for k, lbl in MANDATORY_ORG_FIELDS:
-                    val = org.get(k, "")
-                    display = ", ".join(val) if isinstance(val, list) else str(val)
-                    if display:
-                        rows_html += (
-                            f'<div style="display:grid;grid-template-columns:160px 1fr;'
-                            f'gap:16px;padding:12px 20px;border-bottom:1px solid var(--border)">'
-                            f'<div style="font-size:12px;color:var(--ink-3);font-weight:550">{lbl}</div>'
-                            f'<div style="font-size:13px;color:var(--ink)">{display[:120]}</div>'
-                            f'</div>'
-                        )
-                st.markdown(
-                    f'<div class="card" style="margin-bottom:16px">'
-                    f'<div class="card-head"><h3 class="card-title">Current profile</h3>'
-                    f'{pill("ok", org["name"][:30], dot=False)}</div>'
-                    f'<div class="card-body flush">{rows_html}</div></div>',
-                    unsafe_allow_html=True,
-                )
-            else:
-                st.info("No profile saved yet. Upload a company document to get started.")
+            _manual_form_card(org)
         with col_right:
             _upload_card(org, cfg)
+
+
+def _manual_form_card(org: dict) -> None:
+    """Manual entry form — always visible, pre-populated from existing profile."""
+    has_profile = bool(org.get("name", "").strip())
+    title = "Edit organization profile" if has_profile else "Fill in manually"
+    badge = pill("ok", org["name"][:30], dot=False) if has_profile else ""
+
+    st.markdown(
+        f'<div class="card" style="margin-bottom:16px">'
+        f'<div class="card-head"><h3 class="card-title">{title}</h3>{badge}</div>'
+        f'<div class="card-body">',
+        unsafe_allow_html=True,
+    )
+
+    def _list_val(v) -> str:
+        if isinstance(v, list):
+            return ", ".join(str(x) for x in v)
+        return str(v) if v else ""
+
+    name     = st.text_input("Company name *", value=org.get("name", ""), key="mf_name",
+                              help="Legal name of the organization. Required.")
+    industry = st.text_input("Industry / sector", value=org.get("industry", ""), key="mf_industry",
+                              help="e.g. Software, Healthcare, Financial Services")
+    size     = st.text_input("Number of employees", value=org.get("size", ""), key="mf_size",
+                              placeholder="e.g. 45 employees",
+                              help="Approximate headcount — used in scope statement.")
+    scope    = st.text_area("What the company does (ISMS scope)", value=org.get("scope", ""),
+                             key="mf_scope", height=80,
+                             placeholder="1–2 sentences: core business + IT activities in scope",
+                             help="This becomes the ISMS scope statement for Clause 4.3.")
+    locations = st.text_input("Where the company operates", value=_list_val(org.get("locations")),
+                               key="mf_locations", placeholder="e.g. Berlin, London, Remote",
+                               help="Comma-separated list of offices or operating regions.")
+    processes = st.text_input("Main services or products", value=_list_val(org.get("primary_processes")),
+                               key="mf_processes", placeholder="e.g. SaaS platform, Data analytics, Consulting",
+                               help="Comma-separated list of core business activities.")
+    depts    = st.text_input("Departments / teams", value=_list_val(org.get("departments")),
+                              key="mf_depts", placeholder="e.g. R&D, Sales, IT, HR",
+                              help="Comma-separated list of internal teams in scope.")
+    regs     = st.text_input("Data privacy & regulatory drivers", value=_list_val(org.get("regulatory_drivers") or org.get("legal_basis")),
+                              key="mf_regs", placeholder="e.g. GDPR, NIS2, ISO 27001, TISAX",
+                              help="Comma-separated regulations or standards the company must comply with.")
+    controls = st.text_input("Existing security measures", value=_list_val(org.get("existing_controls")),
+                              key="mf_controls", placeholder="e.g. MFA, VPN, Antivirus, Firewall",
+                              help="Comma-separated security controls already in place.")
+
+    st.markdown(
+        '<div class="hint" style="margin-top:8px">Fields marked * are required. '
+        'All changes save to <code>inputs/organization_data.json</code> — never sent to the cloud.</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown('</div></div>', unsafe_allow_html=True)
+
+    # Persist save feedback across rerun
+    if st.session_state.get("_org_saved"):
+        st.success(
+            "Organization profile saved. "
+            "Next: add **Key Personnel** (managers, CISO, DPO) in the tab above — "
+            "they appear in document headers and review sign-offs."
+        )
+        st.session_state.pop("_org_saved", None)
+
+    if st.button("Save Organization Profile", type="primary", key="btn_manual_save",
+                 use_container_width=True,
+                 help="Save these details. You can come back and edit at any time."):
+        if not name.strip():
+            st.error("Company name is required.")
+        else:
+            def _parse_list(raw: str) -> list:
+                return [x.strip() for x in raw.split(",") if x.strip()]
+
+            form_data = {
+                "name":              name.strip(),
+                "industry":          industry.strip(),
+                "size":              size.strip(),
+                "scope":             scope.strip(),
+                "locations":         _parse_list(locations),
+                "primary_processes": _parse_list(processes),
+                "departments":       _parse_list(depts),
+                "regulatory_drivers": _parse_list(regs),
+                "legal_basis":       _parse_list(regs),
+                "existing_controls": _parse_list(controls),
+            }
+            final = {**load_org(), **form_data}
+            save_org(final)
+            st.session_state["_org_saved"] = True
+            st.rerun()
 
 
 def _upload_card(org: dict, cfg: dict) -> None:
@@ -232,9 +298,9 @@ def _upload_card(org: dict, cfg: dict) -> None:
 
     uploaded_file = st.file_uploader(
         "Upload company document",
-        type=["pdf", "docx", "txt"],
+        type=["pdf", "docx", "txt", "md", "html", "htm"],
         label_visibility="collapsed",
-        help="Drop a PDF, Word file or plain-text file describing your company. The AI reads it and fills in your profile automatically.",
+        help="Drop a PDF, Word (.docx), plain-text, or HTML file describing your company. The AI reads it and fills in your profile automatically.",
     )
 
     if uploaded_file:
@@ -280,25 +346,61 @@ def _upload_card(org: dict, cfg: dict) -> None:
 # Key Personnel tab
 # ---------------------------------------------------------------------------
 
+_UNNAMED_PATTERNS = {"unnamed", "unknown", "tbd", "n/a", "na", "", "-", "—"}
+
+def _kp_is_valid(p: dict) -> bool:
+    name = p.get("name", "").strip()
+    if not name:
+        return False
+    # Strip surrounding parentheses/brackets then check against placeholder words
+    clean = name.strip("()[]").lower()
+    return clean not in _UNNAMED_PATTERNS and not clean.startswith("unnamed")
+
+
 def _tab_personnel() -> None:
     org = load_org()
     cfg = load_config()
     current = org.get("key_personnel", [])
 
+    # Persist save feedback across rerun
+    if st.session_state.get("_kp_saved"):
+        n = st.session_state.pop("_kp_saved")
+        st.success(f"Saved {n} person(s) to `inputs/organization_data.json`.")
+
     if current:
+        st.markdown(
+            '<div class="hint" style="margin-bottom:8px">Edit roles or names inline, then click '
+            '<strong>Save changes</strong> to apply.</div>',
+            unsafe_allow_html=True,
+        )
         for i, p in enumerate(current):
             c1, c2, c3 = st.columns([3, 4, 1])
             with c1:
-                st.text_input("Role", value=p.get("role", ""), key=f"kp_role_{i}")
+                st.text_input("Role", value=p.get("role", ""), key=f"kp_role_{i}",
+                              label_visibility="collapsed" if i > 0 else "visible")
             with c2:
-                st.text_input("Name", value=p.get("name", ""), key=f"kp_name_{i}")
+                st.text_input("Name", value=p.get("name", ""), key=f"kp_name_{i}",
+                              label_visibility="collapsed" if i > 0 else "visible")
             with c3:
                 st.write("")
                 if st.button("Remove", key=f"kp_del_{i}"):
                     current.pop(i)
                     org["key_personnel"] = current
                     save_org(org)
+                    st.session_state["_kp_saved"] = 0
                     st.rerun()
+
+        if st.button("Save changes", key="kp_save_edits", type="primary"):
+            updated = []
+            for i in range(len(current)):
+                role = st.session_state.get(f"kp_role_{i}", "").strip()
+                name = st.session_state.get(f"kp_name_{i}", "").strip()
+                if role and name:
+                    updated.append({"role": role, "name": name})
+            org["key_personnel"] = updated
+            save_org(org)
+            st.session_state["_kp_saved"] = len(updated)
+            st.rerun()
     else:
         st.info("No key personnel saved yet. Add manually or extract from an org chart below.")
 
@@ -311,7 +413,7 @@ def _tab_personnel() -> None:
                 current.append({"role": new_role.strip(), "name": new_name.strip()})
                 org["key_personnel"] = current
                 save_org(org)
-                st.success(f"Added: {new_name} ({new_role})")
+                st.session_state["_kp_saved"] = len(current)
                 st.rerun()
             else:
                 st.warning("Both role and name are required.")
@@ -321,19 +423,21 @@ def _tab_personnel() -> None:
     st.caption("Upload an org chart, HR document, or any file listing employee names and roles.")
 
     if kp_file := st.file_uploader("Upload org chart or HR document",
-                                    type=["pdf", "docx", "txt"], key="kp_upload"):
+                                    type=["pdf", "docx", "txt", "md", "html", "htm"], key="kp_upload"):
         if st.button("Extract names and roles", key="kp_extract_btn", type="primary"):
             with st.spinner("Extracting names from document…"):
                 text = extract_text_from_upload(kp_file)
                 if text:
                     extracted_kp = extract_personnel_with_llm(text, cfg)
                     if extracted_kp is not None:
-                        st.session_state["extracted_kp"] = extracted_kp
+                        # Filter unnamed/placeholder entries in code — not just LLM rules
+                        valid = [p for p in extracted_kp if _kp_is_valid(p)]
+                        st.session_state["extracted_kp"] = valid
 
     if "extracted_kp" in st.session_state:
         extracted_kp = st.session_state["extracted_kp"]
         if extracted_kp:
-            st.success(f"Found {len(extracted_kp)} person(s):")
+            st.success(f"Found {len(extracted_kp)} person(s) — review and save:")
             for p in extracted_kp:
                 st.markdown(f"- **{p.get('name','')}** — {p.get('role','')}")
             if st.button("Save extracted personnel", type="primary", key="kp_save_btn"):
@@ -346,7 +450,7 @@ def _tab_personnel() -> None:
                 org["key_personnel"] = current
                 save_org(org)
                 st.session_state.pop("extracted_kp", None)
-                st.success(f"Saved {added} new person(s).")
+                st.session_state["_kp_saved"] = added
                 st.rerun()
         else:
             st.warning("No named personnel found in the document. Try a different file or add manually.")
@@ -625,10 +729,12 @@ def _tab_ai_engine() -> None:
             int(critic_cfg.get("max_revisions", 2)),
             help="How many times the writer is allowed to fix the document after reviewer feedback. 2 is usually enough.",
         )
+        _active = get_active_clauses()
+        _default_auto = [c for c in critic_cfg.get("auto_clauses", ["5.2","6.1.2","6.1.3","9.3"]) if c in _active]
         auto_cl = st.multiselect(
             "Auto-review these documents after generation",
-            list(CLAUSE_NAMES.keys()),
-            default=critic_cfg.get("auto_clauses", ["5.2","6.1.2","6.1.3","9.3"]),
+            list(_active.keys()),
+            default=_default_auto,
             format_func=lambda x: f"{x} — {CLAUSE_NAMES[x]}",
             help="Pick which documents the reviewer should auto-check. Defaults to the high-stakes clauses.",
         )
@@ -674,23 +780,50 @@ def _tab_ai_engine() -> None:
 # ---------------------------------------------------------------------------
 
 def _tab_model_guide() -> None:
+    cfg = load_config()
     hw = detect_hardware()
     ram = hw["ram_gb"]
     vram = hw["vram_gb"]
     cpu = hw["cpu"]
     hw_line = f"{cpu} · {ram} GB RAM" + (f" · {vram} GB VRAM" if vram else " · No NVIDIA GPU detected")
-    st.caption(f"Detected hardware: {hw_line}")
+
+    # Use hardware_tier from setup_config.py if available; else derive from live detection
+    tier = cfg.get("timeouts", {}).get("hardware_tier", "")
+    if not tier:
+        if ram >= 32 and vram >= 8:   tier = "high"
+        elif ram >= 16 and vram >= 4: tier = "mid"
+        elif ram >= 8:                tier = "low"
+        else:                          tier = "minimal"
+
+    tier_labels = {"high": "High-end", "mid": "Mid-range", "low": "Standard", "minimal": "Minimal"}
+    st.info(
+        f"**Detected hardware:** {hw_line}  \n"
+        f"**Tier:** {tier_labels.get(tier, tier)} — models highlighted in teal are recommended for your machine."
+    )
+
+    col_redetect, _ = st.columns([1, 3])
+    with col_redetect:
+        if st.button("Re-detect hardware", key="redetect_hw_guide"):
+            import subprocess as _sp
+            from core import BASE_DIR as _BD
+            _sp.run([sys.executable, str(_BD / "setup_config.py")], cwd=str(_BD))
+            st.success("Hardware re-detected. Reload to see updated settings.")
+            detect_hardware.clear()
+            st.rerun()
 
     cards_html = ""
     for m in MODEL_GUIDE:
-        recommended = (m["min_ram_gb"] <= ram)
+        recommended = tier in m.get("tiers", [])
         border = "border:2px solid var(--accent);" if recommended else ""
+        badge = (
+            "&nbsp;&nbsp;<span style='font-size:10px;background:var(--accent);color:white;"
+            "border-radius:4px;padding:1px 6px'>recommended</span>"
+        ) if recommended else ""
         cards_html += (
             f'<div class="card" style="padding:0;{border}">'
             f'<div class="card-body">'
-            f'<div class="mono" style="font-size:13px;font-weight:500;color:var(--ink)">{m["Model"]}'
-            f'{"&nbsp;&nbsp;<span style=\'font-size:10px;background:var(--accent);color:white;border-radius:4px;padding:1px 6px\'>recommended</span>" if recommended else ""}'
-            f'</div>'
+            f'<div class="mono" style="font-size:13px;font-weight:500;color:var(--ink)">'
+            f'{m["Model"]}{badge}</div>'
             f'<div style="font-size:12px;color:var(--ink-3);margin:4px 0 12px">{m["Best for"]}</div>'
             f'<div class="meta-row"><span class="k">VRAM</span><span class="v mono">{m["VRAM"]}</span></div>'
             f'<div class="meta-row"><span class="k">Speed</span><span class="v mono">{m["Speed"]}</span></div>'

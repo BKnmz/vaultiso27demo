@@ -11,7 +11,7 @@ import streamlit as st
 from datetime import datetime
 
 from core import (
-    CLAUSE_NAMES, STATUS_KIND, REVIEW_RESULT, OUTPUTS_DIR,
+    CLAUSE_NAMES, STATUS_KIND, REVIEW_RESULT, OUTPUTS_DIR, get_active_clauses,
     get_clause_status, get_review_assessment, read_output,
     load_org, load_config, export_clause_to_word, export_all_to_excel,
     export_soa_to_excel, upload_clause_to_github, _get_personnel_for_doc,
@@ -41,7 +41,7 @@ def _build_zip_of_all_docx(generated: list[tuple[str, str]], org: dict) -> bytes
 
 def render() -> None:
     generated = [
-        (cid, name) for cid, name in CLAUSE_NAMES.items()
+        (cid, name) for cid, name in get_active_clauses().items()
         if (OUTPUTS_DIR / f"{cid}.md").exists()
     ]
 
@@ -141,12 +141,7 @@ def render() -> None:
         help="Type a clause number (5.2) or part of a document title to filter the list.",
     )
 
-    st.markdown(
-        '<div class="card"><div class="card-head">'
-        '<h3 class="card-title">All documents</h3></div>'
-        '<div class="card-body">',
-        unsafe_allow_html=True,
-    )
+    st.markdown('<h3 style="margin-top:24px;margin-bottom:12px;">All documents</h3>', unsafe_allow_html=True)
 
     # Header row — column ratios match per-row buttons below for alignment
     col_widths = [1, 5, 2, 2, 2]
@@ -156,6 +151,7 @@ def render() -> None:
     h[2].markdown('<div class="muted" style="font-size:11px;font-weight:600">STATUS</div>', unsafe_allow_html=True)
     h[3].markdown('<div class="muted" style="font-size:11px;font-weight:600">MODIFIED</div>', unsafe_allow_html=True)
     h[4].markdown('<div class="muted" style="font-size:11px;font-weight:600;text-align:right">EXPORT</div>', unsafe_allow_html=True)
+    st.markdown('<div style="border-bottom:1px solid var(--border-2);margin:2px 0 6px 0"></div>', unsafe_allow_html=True)
 
     pb, rvb, apb = _get_personnel_for_doc(org)
     for cid, name in generated:
@@ -188,8 +184,6 @@ def render() -> None:
                     use_container_width=True,
                     help=f"Download {cid} as a Word document.",
                 )
-
-    st.markdown('</div></div>', unsafe_allow_html=True)
 
     # ── Bulk GitHub upload ────────────────────────────────────────────────
     if has_github:

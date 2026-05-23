@@ -9,7 +9,7 @@ import streamlit as st
 
 from core import (
     CLAUSE_NAMES, BASE_DIR, load_config, get_ollama_models,
-    completion_stats, get_clause_status,
+    completion_stats, get_clause_status, get_active_clauses, load_org,
 )
 from components import page_head
 from icons import icon
@@ -31,6 +31,22 @@ def _color_log_line(line: str) -> str:
 
 
 def render() -> None:
+    # ── Guard: org profile must be set ───────────────────────────────────
+    _org = load_org()
+    if not _org.get("name", "").strip():
+        page_head("Generate documents", "Step 2 — Generate your ISO 27001 documents.")
+        st.warning(
+            "**Organization profile not set up yet.**  \n"
+            "The AI needs your company name, industry, and scope to write ISO 27001 documents.  \n"
+            "Go to **Organization → Profile**, upload a company document or fill in the fields, "
+            "then return here."
+        )
+        if st.button("Go to Organization", type="primary"):
+            st.query_params["page"] = "org"
+            st.rerun()
+        st.stop()
+        return
+
     # ── Result popup from previous run ───────────────────────────────────
     if "_gen_result" in st.session_state:
         res = st.session_state.pop("_gen_result")
@@ -42,9 +58,10 @@ def render() -> None:
             st.error(res["msg"] + (f"\n\n```\n{detail}\n```" if detail else ""))
 
     cfg = load_config()
+    active_clauses = get_active_clauses()
     _, counts = completion_stats()
     done_count = counts["APPROVED"]
-    total      = len(CLAUSE_NAMES)
+    total      = len(active_clauses)
 
     actions = (
         f'<a href="?page=org" target="_self" class="btn ghost">'
@@ -61,55 +78,46 @@ def render() -> None:
 
     with col_left:
         # ── Options card ─────────────────────────────────────────────────
-        st.markdown('<div class="card"><div class="card-head"><h3 class="card-title">What to generate</h3></div><div class="card-body">', unsafe_allow_html=True)
+        st.markdown('<h3 style="margin-top:0px;margin-bottom:12px;">What to generate</h3>', unsafe_allow_html=True)
 
-        mode_key = "gen_mode"
-        if mode_key not in st.session_state:
-            st.session_state[mode_key] = "all"
-
-        c1, c2 = st.columns(2)
-        with c1:
-            all_selected = st.session_state[mode_key] == "all"
-            border = "1.5px solid var(--ink)" if all_selected else "1px solid var(--border-2)"
-            st.markdown(
-                f'<div style="border:{border};border-radius:8px;padding:14px;cursor:pointer">',
-                unsafe_allow_html=True,
-            )
-            if st.button("All 23 documents", key="btn_mode_all", use_container_width=True,
-                         type="primary" if all_selected else "secondary",
-                         help="The AI writes every required ISO 27001 document using your company info. Takes 20-60 minutes."):
+        with st.container():
+            mode_key = "gen_mode"
+            if mode_key not in st.session_state:
                 st.session_state[mode_key] = "all"
-                st.rerun()
-            st.markdown(
-                '<div class="hint" style="text-align:center">Full ISMS — clauses 4.1 through 10.2</div></div>',
-                unsafe_allow_html=True,
-            )
-        with c2:
-            one_selected = st.session_state[mode_key] == "one"
-            border2 = "1.5px solid var(--ink)" if one_selected else "1px solid var(--border-2)"
-            st.markdown(
-                f'<div style="border:{border2};border-radius:8px;padding:14px;cursor:pointer">',
-                unsafe_allow_html=True,
-            )
-            if st.button("One specific document", key="btn_mode_one", use_container_width=True,
-                         type="primary" if one_selected else "secondary",
-                         help="Generate just one clause document. Useful for re-running a single document after editing your profile."):
-                st.session_state[mode_key] = "one"
-                st.rerun()
-            st.markdown(
-                '<div class="hint" style="text-align:center">Pick a single clause</div></div>',
-                unsafe_allow_html=True,
-            )
 
-        cid = None
-        if st.session_state[mode_key] == "one":
-            cid = st.selectbox(
-                "Select document",
-                list(CLAUSE_NAMES.keys()),
-                format_func=lambda x: f"{x} — {CLAUSE_NAMES[x]}",
-                label_visibility="collapsed",
-                help="Pick which ISO 27001 clause to generate.",
-            )
+            c1, c2 = st.columns(2)
+            with c1:
+                all_selected = st.session_state[mode_key] == "all"
+                if st.button(f"All {total} documents", key="btn_mode_all", use_container_width=True,
+                             type="primary" if all_selected else "secondary",
+                             help="The AI writes every required ISO 27001 document using your company info. Takes 20-60 minutes."):
+                    st.session_state[mode_key] = "all"
+                    st.rerun()
+                st.markdown(
+                    f'<div class="hint" style="text-align:center">Demo ISMS — {total} mandatory clauses</div>',
+                    unsafe_allow_html=True,
+                )
+            with c2:
+                one_selected = st.session_state[mode_key] == "one"
+                if st.button("One specific document", key="btn_mode_one", use_container_width=True,
+                             type="primary" if one_selected else "secondary",
+                             help="Generate just one clause document. Useful for re-running a single document after editing your profile."):
+                    st.session_state[mode_key] = "one"
+                    st.rerun()
+                st.markdown(
+                    '<div class="hint" style="text-align:center">Pick a single clause</div>',
+                    unsafe_allow_html=True,
+                )
+
+            cid = None
+            if st.session_state[mode_key] == "one":
+                cid = st.selectbox(
+                    "Select document",
+                    list(active_clauses.keys()),
+                    format_func=lambda x: f"{x} — {active_clauses[x]}",
+                    label_visibility="collapsed",
+                    help="Pick which ISO 27001 clause to generate.",
+                )
 
         st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
         force = st.checkbox(
@@ -133,7 +141,6 @@ def render() -> None:
                 f'<div class="hint" style="margin-left:24px">Clauses {" · ".join(auto_clauses)}</div>',
                 unsafe_allow_html=True,
             )
-        st.markdown('</div></div>', unsafe_allow_html=True)
 
         # ── Ollama check + Generate button ────────────────────────────────
         _base_url = cfg.get("llm", {}).get("base_url", "http://localhost:11434")
@@ -277,7 +284,7 @@ def render() -> None:
         )
 
         # Queue preview
-        queue_clauses = [(cid, name) for cid, name in CLAUSE_NAMES.items()
+        queue_clauses = [(cid, name) for cid, name in active_clauses.items()
                          if get_clause_status(cid) != "APPROVED"][:5]
         q_html = ""
         for i, (qcid, qname) in enumerate(queue_clauses):

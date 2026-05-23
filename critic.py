@@ -136,21 +136,23 @@ PERFORM THESE FIVE CHECKS:
 5. AUDIT READINESS — Would an experienced ISO 27001:2022 external auditor accept this document
    as conforming evidence during a Stage 2 certification audit?
 
-OUTPUT FORMAT — respond in this exact structure:
+OUTPUT FORMAT — respond in this exact structure (fill every field — do NOT copy placeholder text):
 
 ## Critic Review — Clause {clause_id}: {clause_name}
 
-**Overall Assessment:** [PASS / CONDITIONAL PASS / FAIL]
-**Confidence:** [HIGH / MEDIUM / LOW]
+**Overall Assessment:** FAIL
+**Confidence:** HIGH
 
 ### Findings Table
 | # | Check | Result | Detail |
 |---|-------|--------|--------|
-| 1 | ISO Mapping | [PASS/FAIL/WARN] | [specific detail] |
-| 2 | Completeness | [PASS/FAIL/WARN] | [specific detail] |
-| 3 | Org Specificity | [PASS/FAIL/WARN] | [specific detail] |
-| 4 | Internal Consistency | [PASS/FAIL/WARN] | [specific detail] |
-| 5 | Audit Readiness | [PASS/FAIL/WARN] | [specific detail] |
+| 1 | ISO Mapping | PASS | All mandatory shall-requirements for clause 4.1 are explicitly addressed. |
+| 2 | Completeness | FAIL | Section 3 is missing — add specific internal issue analysis. |
+| 3 | Org Specificity | WARN | Generic statements in section 2 should reference actual departments. |
+| 4 | Internal Consistency | PASS | No contradictions found in scope or roles. |
+| 5 | Audit Readiness | FAIL | Document would not pass Stage 2 audit without the missing section. |
+
+IMPORTANT: In the Result column write exactly one word — PASS, FAIL, or WARN. No brackets, no slashes, no other text.
 
 ### Required Revisions
 {revision_instructions}
@@ -190,7 +192,8 @@ def call_ollama(base_url, model, prompt, temperature=0.1, timeout=600):
         "stream": False,
         "options": {
             "temperature": temperature,
-            "num_predict": 1000,
+            "num_predict": 1200,
+            "num_ctx": 4096,
         },
     }
     for attempt in range(1, 3):

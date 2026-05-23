@@ -91,6 +91,11 @@ section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] {
   letter-spacing: -0.01em; color: var(--ink);
 }
 .brand-sub { font-size: 11px; color: var(--ink-3); font-weight: 500; margin-top: 1px; }
+.demo-badge {
+  display: inline-block; font-size: 9px; font-weight: 700; letter-spacing: 0.06em;
+  padding: 1px 5px; border-radius: 4px; vertical-align: middle; margin-left: 4px;
+  background: oklch(0.55 0.18 250); color: #fff; font-family: var(--font-mono);
+}
 
 .nav-label {
   font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.08em;

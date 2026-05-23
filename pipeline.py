@@ -209,9 +209,11 @@ def call_ollama(base_url, model_name, prompt, temperature=0.2, timeout=600):
         "model": model_name,
         "prompt": prompt,
         "stream": False,
+        "keep_alive": 0,
         "options": {
             "temperature": temperature,
-            "num_predict": 1200,
+            "num_predict": 1500,
+            "num_ctx": 4096,
         },
     }
     try:
@@ -250,6 +252,18 @@ WRITING STYLE — apply strictly to all output:
 - Auditor-facing tone: factual, unambiguous, defensible
 - Use ISO 27001:2022 terminology exactly as written in the standard
 
+REGULATORY AND STANDARDS GLOSSARY — use these exact descriptions, never invent alternatives:
+- TISAX: Trusted Information Security Assessment Exchange — automotive industry information security assessment framework governed by the VDA (Verband der Automobilindustrie)
+- GDPR: General Data Protection Regulation — EU Regulation 2016/679 on personal data protection
+- NIS2: Network and Information Security Directive 2 — EU Directive 2022/2555 on cybersecurity measures
+- ISO 27001 / ISO/IEC 27001:2022: International standard for information security management systems
+- ASPICE: Automotive SPICE (Software Process Improvement and Capability dEtermination) — process assessment framework for automotive software
+- UN R155 / UNR155: UN Regulation No. 155 — cybersecurity and cybersecurity management systems for vehicles
+- ISO 26262: International standard for functional safety of road vehicles
+- SOC 2: Service Organization Control 2 — AICPA trust services criteria for security, availability, processing integrity, confidentiality, and privacy
+- PCI-DSS: Payment Card Industry Data Security Standard
+- HIPAA: Health Insurance Portability and Accountability Act — US healthcare data privacy law
+
 """
 
 REVISION_PROMPT = """\
@@ -280,28 +294,26 @@ CRITICAL: Output ONLY the revised document body. Do NOT include:
 """
 
 USER_REVISION_PROMPT = """\
-You are an ISO 27001:2022 compliance specialist revising a draft ISMS document based on human reviewer instructions.
+You are an ISO 27001:2022 compliance specialist revising a draft ISMS document.
 
 CLAUSE: {clause_id} — {clause_name}
 ORGANIZATION: {org_name} | {org_size} | {org_industry}
 
-HUMAN REVIEWER INSTRUCTIONS (authoritative — address all points):
-{user_notes}
-
+{ai_findings_block}{user_notes_block}
 CURRENT DRAFT:
 {document}
 
-TASK: Produce a revised version that fully addresses the reviewer's instructions above.
-- Keep sections not mentioned by the reviewer — do not remove content unnecessarily.
+TASK: Produce a revised version that fully addresses ALL instructions above.
+- Keep sections not mentioned — do not remove content unnecessarily.
 - Be specific to {org_name}. Do not add generic filler.
-- Do not invent requirements not already in the draft.
+- Do not invent requirements not in the draft.
 - Formal third-person only. No "our", "we", "us".
 
 OUTPUT FORMAT: Markdown with numbered section headers matching the original structure.
 
 CRITICAL: Output ONLY the revised document body. Do NOT include:
 - A "Changes Made", "Revisions", "Auditor Findings", or "Changelog" section
-- Word counts or meta-commentary (e.g. "(Word Count: ~350)")
+- Word counts or meta-commentary
 - References to "the reviewer" in the document body
 - Any preamble such as "Here is the revised document:"
 """
@@ -399,8 +411,20 @@ def run_revision_loop(clause_id, cfg, org, out_file, max_revisions):
             org_industry=org.get("industry", ""),
             user_notes_block="",
             critic_findings=findings,
-            document=document[:6000],
+            document=document[:3000],
         )
+
+        # Unload reviewer model before generator — only one model fits in VRAM at a time
+        reviewer_model = cfg.get("critic", {}).get("model", "")
+        if reviewer_model:
+            try:
+                requests.post(
+                    f"{cfg['llm']['base_url']}/api/generate",
+                    json={"model": reviewer_model, "keep_alive": 0},
+                    timeout=15,
+                )
+            except Exception:
+                pass
 
         revised = call_ollama(
             cfg["llm"]["base_url"],
@@ -453,13 +477,43 @@ def regenerate_with_user_notes(clause_id, cfg, org):
         return False, f"Could not read status file: {e}"
 
     user_notes = status_data.get("notes", "").strip()
-    if not user_notes:
-        return False, "No reviewer notes found. Add notes in the Decision notes box and flag the document first."
+
+    # Read AI reviewer findings from critic.md (Required Revisions section only)
+    critic_file = outputs_dir / f"{clause_id}.critic.md"
+    ai_findings = ""
+    if critic_file.exists():
+        try:
+            ctext = critic_file.read_text(encoding="utf-8")
+            in_rev = False
+            rev_lines = []
+            for ln in ctext.splitlines():
+                if "### Required Revisions" in ln:
+                    in_rev = True
+                    continue
+                if in_rev and ln.strip().startswith("###"):
+                    break
+                if in_rev and ln.strip():
+                    rev_lines.append(ln.strip())
+            ai_findings = "\n".join(rev_lines).strip()
+        except Exception:
+            pass
+
+    if not user_notes and not ai_findings:
+        return False, "No reviewer notes or AI findings. Add notes in the Decision notes box or run the AI Reviewer first."
 
     if not out_file.exists():
         return False, f"No generated document found for {clause_id}."
 
     document = out_file.read_text(encoding="utf-8", errors="replace")
+
+    ai_findings_block = (
+        f"AI REVIEWER FINDINGS (must fix):\n{ai_findings}\n\n"
+        if ai_findings else ""
+    )
+    user_notes_block = (
+        f"HUMAN REVIEWER INSTRUCTIONS (authoritative):\n{user_notes}\n\n"
+        if user_notes else ""
+    )
 
     revision_prompt = USER_REVISION_PROMPT.format(
         clause_id=clause_id,
@@ -467,9 +521,23 @@ def regenerate_with_user_notes(clause_id, cfg, org):
         org_name=org.get("name", ""),
         org_size=org.get("size", ""),
         org_industry=org.get("industry", ""),
-        user_notes=user_notes,
-        document=document[:6000],
+        ai_findings_block=ai_findings_block,
+        user_notes_block=user_notes_block,
+        document=document[:3000],
     )
+
+    # Unload reviewer model before loading generator — VRAM can only hold one at a time
+    reviewer_model = cfg.get("critic", {}).get("model", "")
+    if reviewer_model:
+        try:
+            requests.post(
+                f"{cfg['llm']['base_url']}/api/generate",
+                json={"model": reviewer_model, "keep_alive": 0},
+                timeout=15,
+            )
+            log.info("[USER-REGEN] unloaded reviewer model %s from VRAM", reviewer_model)
+        except Exception:
+            pass
 
     log.info("[USER-REGEN] %s — regenerating with reviewer notes", clause_id)
     revised = call_ollama(
@@ -492,7 +560,7 @@ def regenerate_with_user_notes(clause_id, cfg, org):
         hash_file.unlink()
 
     from core import save_status
-    save_status(clause_id, "PENDING", "")
+    save_status(clause_id, "DRAFT", "")
 
     auto_clauses = cfg.get("critic", {}).get("auto_clauses", [])
     if cfg.get("critic", {}).get("enabled") and clause_id in auto_clauses:

@@ -1,8 +1,8 @@
 # VaultISO27 — Demo
 
-> **5-clause demo edition** of [VaultISO27](https://github.com/BKnmz/VaultISO27) — on-premises ISO 27001:2022 ISMS document generator. No cloud. No SaaS. Your data never leaves your machine.
+> **10-clause demo edition** of [VaultISO27](https://github.com/BKnmz/VaultISO27) — on-premises ISO 27001:2022 ISMS document generator. No cloud. No SaaS. Your data never leaves your machine.
 
-Generates documents for **5 mandatory clauses** (4.1, 4.3, 5.2, 6.1, 8.2) using local LLMs via Ollama + ChromaDB RAG.
+Generates documents for **10 mandatory clauses** (4.1, 4.2, 4.3, 5.1, 5.2, 5.3, 6.1, 6.1.2, 6.1.3, 6.2) using local LLMs via Ollama + ChromaDB RAG.
 
 ---
 
@@ -110,3 +110,13 @@ org profile + RAG (ChromaDB)  →  Jinja2 skill template  →  phi4-mini (Ollama
 ```
 
 All inference local. All data local. Zero telemetry.
+
+---
+
+## Legal
+
+**ISO/IEC 27001:2022** is © ISO/IEC. This tool does **not** redistribute the standard text.
+
+The audit checklist (`rag/ISO27001_Audit_Checklist_demo.xlsx`) contains original paraphrases of 21 Annex A controls — not verbatim ISO text. See the **LEGAL_NOTICE** sheet inside the file and [NOTICE.md](NOTICE.md) for details.
+
+Generated documents are drafts. Review against the official standard before any certification process. Source code: MIT License. Checklist paraphrases: CC BY 4.0.

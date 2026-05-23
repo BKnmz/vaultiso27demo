@@ -9,7 +9,7 @@ import streamlit as st
 from datetime import datetime
 
 from core import (
-    ANNEX_A_CONTROLS, ANNEX_A_THEMES, ANNEX_A_STATUSES,
+    ANNEX_A_CONTROLS, ANNEX_A_THEMES, ANNEX_A_STATUSES, DEMO_ANNEX_CONTROLS,
     load_annex_a, save_annex_a, export_soa_to_excel,
     _annex_collect_from_state, load_org,
 )
@@ -35,17 +35,20 @@ def render() -> None:
     evidence = load_annex_a()
     org = load_org()
 
+    # Demo build: always show only the 21 controls present in the demo RAG checklist.
+    active_controls = {cid: ctrl for cid, ctrl in ANNEX_A_CONTROLS.items() if cid in DEMO_ANNEX_CONTROLS}
+
     # ── Metrics ───────────────────────────────────────────────────────────
-    total     = len(ANNEX_A_CONTROLS)
-    app_count = sum(1 for cid in ANNEX_A_CONTROLS if evidence.get(cid, {}).get("applicable", True))
+    total     = len(active_controls)
+    app_count = sum(1 for cid in active_controls if evidence.get(cid, {}).get("applicable", True))
     excl      = total - app_count
-    impl      = sum(1 for cid in ANNEX_A_CONTROLS
+    impl      = sum(1 for cid in active_controls
                     if evidence.get(cid, {}).get("applicable", True)
                     and evidence.get(cid, {}).get("status") == "Implemented")
-    partial   = sum(1 for cid in ANNEX_A_CONTROLS
+    partial   = sum(1 for cid in active_controls
                     if evidence.get(cid, {}).get("applicable", True)
                     and evidence.get(cid, {}).get("status") == "Partial")
-    planned   = sum(1 for cid in ANNEX_A_CONTROLS
+    planned   = sum(1 for cid in active_controls
                     if evidence.get(cid, {}).get("applicable", True)
                     and evidence.get(cid, {}).get("status") == "Planned")
 
@@ -57,7 +60,7 @@ def render() -> None:
 
     page_head(
         "Annex A controls",
-        "Track evidence and applicability for all 93 ISO 27001:2022 Annex A controls. "
+        "Track evidence and applicability for the 21 Annex A controls covered by this demo. "
         "Export as a Statement of Applicability for your auditor.",
     )
 
@@ -115,7 +118,7 @@ def render() -> None:
         )
         chips_html = ""
         for theme_id, theme_name in ANNEX_A_THEMES.items():
-            controls = [(cid, ctrl) for cid, ctrl in ANNEX_A_CONTROLS.items()
+            controls = [(cid, ctrl) for cid, ctrl in active_controls.items()
                         if ctrl["theme"] == theme_id]
             grid_items = ""
             for cid, ctrl in controls:
@@ -156,12 +159,12 @@ def render() -> None:
     with col_detail:
         # Selected control from URL
         url_ctrl = st.query_params.get("ctrl", "")
-        if url_ctrl and url_ctrl in ANNEX_A_CONTROLS:
+        if url_ctrl and url_ctrl in active_controls:
             st.session_state["annex_sel"] = url_ctrl
 
-        sel_cid = st.session_state.get("annex_sel", list(ANNEX_A_CONTROLS.keys())[0])
-        if sel_cid not in ANNEX_A_CONTROLS:
-            sel_cid = list(ANNEX_A_CONTROLS.keys())[0]
+        sel_cid = st.session_state.get("annex_sel", list(active_controls.keys())[0])
+        if sel_cid not in active_controls:
+            sel_cid = list(active_controls.keys())[0]
 
         ctrl = ANNEX_A_CONTROLS[sel_cid]
         e    = evidence.get(sel_cid, {})
@@ -224,7 +227,7 @@ def render() -> None:
         # Coverage by theme
         cov_html = ""
         for theme_id, theme_name in ANNEX_A_THEMES.items():
-            theme_controls = [cid for cid, ctrl in ANNEX_A_CONTROLS.items() if ctrl["theme"] == theme_id]
+            theme_controls = [cid for cid, ctrl in active_controls.items() if ctrl["theme"] == theme_id]
             t_impl = sum(1 for cid in theme_controls
                          if evidence.get(cid, {}).get("applicable", True)
                          and evidence.get(cid, {}).get("status") == "Implemented")

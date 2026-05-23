@@ -12,6 +12,7 @@ rag/chroma_db/
 outputs/
 logs/
 inputs/organization_data.json
+icon_main_backup.ico
 
 # Secrets
 *.env

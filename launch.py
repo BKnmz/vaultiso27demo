@@ -69,14 +69,17 @@ def check_hardware_config():
 def check_rag_index():
     chroma_path = BASE_DIR / "rag" / "chroma_db"
     if not chroma_path.exists():
-        log.info("ChromaDB index not found — building now (internet required for first run)...")
+        log.info("ChromaDB index not found — attempting to build now...")
         result = subprocess.run(
             [sys.executable, str(BASE_DIR / "rag_setup.py")],
             cwd=str(BASE_DIR),
         )
         if result.returncode != 0:
-            log.error("RAG setup failed. Check rag/ISO27001_Audit_Checklist_V3.xlsx exists.")
-            sys.exit(1)
+            log.warning(
+                "RAG index build failed — tool will run without RAG context. "
+                "To enable full RAG: place a compatible audit checklist at rag/ISO27001_Audit_Checklist_demo.xlsx"
+            )
+            return  # soft-fail: tool still usable with skill-templates only
 
     log.info("RAG index  OK")
 

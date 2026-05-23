@@ -1,5 +1,5 @@
 """
-Parses ISO27001_Audit_Checklist_V3.xlsx into ChromaDB.
+Parses ISO27001_Audit_Checklist_demo.xlsx into ChromaDB.
 Run once; skips rebuild if Excel file hasn't changed.
 """
 
@@ -184,6 +184,18 @@ def main():
     hash_file = chroma_path / "source.hash"
 
     print(f"Source: {excel_path}")
+
+    # If source Excel is absent, leave any existing index in place and exit cleanly.
+    # The pipeline has a built-in fallback for empty/missing RAG results.
+    if not excel_path.exists():
+        print(
+            "ISO 27001 audit checklist not found — skipping RAG index build.\n"
+            "The tool will still run using skill templates only (documents will be\n"
+            "generated without ISO reference context). To enable full RAG support,\n"
+            "place a compatible audit checklist at:\n"
+            f"  {excel_path.resolve()}"
+        )
+        return
 
     # Check if rebuild is needed
     current_hash = file_hash(excel_path)

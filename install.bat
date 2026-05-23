@@ -1,6 +1,6 @@
 @echo off
 setlocal enabledelayedexpansion
-title VaultISO27 — Setup
+title VaultISO27 - Setup
 
 cls
 echo.
@@ -24,9 +24,9 @@ pause
 set "SCRIPT_DIR=%~dp0"
 set "VENV=%SCRIPT_DIR%.venv"
 
-:: ─────────────────────────────────────────────────────────────
-:: STEP 1 — Check Python 3.9+
-:: ─────────────────────────────────────────────────────────────
+:: -------------------------------------------------------------
+:: STEP 1 - Check Python 3.9+
+:: -------------------------------------------------------------
 echo.
 echo  [STEP 1/5]  Checking Python...
 python --version >nul 2>&1
@@ -45,9 +45,9 @@ if errorlevel 1 (
 for /f "tokens=2" %%v in ('python --version 2^>^&1') do set PYVER=%%v
 echo  [OK]  Python %PYVER%
 
-:: ─────────────────────────────────────────────────────────────
-:: STEP 2 — Virtual environment
-:: ─────────────────────────────────────────────────────────────
+:: -------------------------------------------------------------
+:: STEP 2 - Virtual environment
+:: -------------------------------------------------------------
 echo.
 echo  [STEP 2/5]  Setting up virtual environment...
 if not exist "%VENV%\Scripts\activate.bat" (
@@ -65,9 +65,9 @@ if not exist "%VENV%\Scripts\activate.bat" (
 )
 call "%VENV%\Scripts\activate.bat"
 
-:: ─────────────────────────────────────────────────────────────
-:: STEP 3 — Install packages
-:: ─────────────────────────────────────────────────────────────
+:: -------------------------------------------------------------
+:: STEP 3 - Install packages
+:: -------------------------------------------------------------
 echo.
 echo  [STEP 3/5]  Installing Python packages...
 echo              (first run: ~500 MB download, 5-10 minutes)
@@ -88,9 +88,9 @@ echo.
 echo.
 echo  [OK]  Packages installed
 
-:: ─────────────────────────────────────────────────────────────
+:: -------------------------------------------------------------
 :: STEP 3b — Detect hardware and configure settings
-:: ─────────────────────────────────────────────────────────────
+:: -------------------------------------------------------------
 echo.
 echo  [STEP 3b]  Detecting hardware and configuring settings...
 echo.
@@ -102,9 +102,9 @@ if errorlevel 1 (
     echo.
 )
 
-:: ─────────────────────────────────────────────────────────────
-:: STEP 4 — Build knowledge base
-:: ─────────────────────────────────────────────────────────────
+:: -------------------------------------------------------------
+:: STEP 4 - Build knowledge base
+:: -------------------------------------------------------------
 echo.
 echo  [STEP 4/5]  Building ISO 27001 knowledge base...
 echo              (downloads embedding model ~90 MB on first run)
@@ -112,18 +112,19 @@ echo.
 python "%SCRIPT_DIR%rag_setup.py"
 if errorlevel 1 (
     echo.
-    echo  ERROR: Knowledge base build failed.
-    echo  - Make sure rag\ISO27001_Audit_Checklist_V3.xlsx exists
-    echo  - Try running:  python rag_setup.py --force
+    echo  [!]  Knowledge base build failed or checklist not found.
+    echo       The tool will still run using skill templates only.
+    echo       For richer document generation, place a compatible audit
+    echo       checklist at: rag\ISO27001_Audit_Checklist_demo.xlsx
     echo.
-    pause & exit /b 1
+) else (
+    echo.
+    echo  [OK]  Knowledge base ready
 )
-echo.
-echo  [OK]  Knowledge base ready
 
-:: ─────────────────────────────────────────────────────────────
-:: STEP 5 — Ollama AI engine
-:: ─────────────────────────────────────────────────────────────
+:: -------------------------------------------------------------
+:: STEP 5 - Ollama AI engine
+:: -------------------------------------------------------------
 echo.
 echo  [STEP 5/5]  Checking Ollama AI engine...
 ollama --version >nul 2>&1
@@ -154,18 +155,18 @@ if errorlevel 1 (
     echo  [OK]  AI models ready
 )
 
-:: ─────────────────────────────────────────────────────────────
+:: -------------------------------------------------------------
 :: First-run: create blank organization profile
-:: ─────────────────────────────────────────────────────────────
+:: -------------------------------------------------------------
 if not exist "%SCRIPT_DIR%inputs\organization_data.json" (
     if exist "%SCRIPT_DIR%inputs\organization_data_default.json" (
         copy /Y "%SCRIPT_DIR%inputs\organization_data_default.json" "%SCRIPT_DIR%inputs\organization_data.json" >nul
     )
 )
 
-:: ─────────────────────────────────────────────────────────────
+:: -------------------------------------------------------------
 :: Optional: Desktop shortcut
-:: ─────────────────────────────────────────────────────────────
+:: -------------------------------------------------------------
 echo.
 echo  ============================================================
 set /p "SHORTCUT=  Create a Desktop shortcut to launch VaultISO27? [Y/N]: "
@@ -180,9 +181,9 @@ if /i "!SHORTCUT!"=="Y" (
     echo  [OK]  Desktop shortcut created
 )
 
-:: ─────────────────────────────────────────────────────────────
+:: -------------------------------------------------------------
 :: Done
-:: ─────────────────────────────────────────────────────────────
+:: -------------------------------------------------------------
 echo.
 echo  ============================================================
 echo   Setup complete!

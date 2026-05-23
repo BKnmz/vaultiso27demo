@@ -6,7 +6,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import streamlit as st
 
-from core import CLAUSE_NAMES, BASE_DIR, load_config, get_embedding_model
+from core import CLAUSE_NAMES, BASE_DIR, load_config, get_embedding_model, get_active_clauses
 from components import page_head
 from icons import icon
 
@@ -37,10 +37,11 @@ def render() -> None:
         st.warning("ISO knowledge base not built yet. Run `python rag_setup.py` from the installation folder.")
         return
 
+    _active = get_active_clauses()
     cid = st.selectbox(
         "Select a document to inspect",
-        list(CLAUSE_NAMES.keys()),
-        format_func=lambda x: f"{x} — {CLAUSE_NAMES[x]}",
+        list(_active.keys()),
+        format_func=lambda x: f"{x} — {_active[x]}",
     )
 
     if st.button("Show ISO reference entries", type="primary"):

@@ -11,7 +11,7 @@ import streamlit as st
 from datetime import datetime
 
 from core import (
-    CLAUSE_NAMES, STATUS_KIND, REVIEW_RESULT, OUTPUTS_DIR,
+    CLAUSE_NAMES, STATUS_KIND, REVIEW_RESULT, OUTPUTS_DIR, get_active_clauses,
     get_clause_status, save_status, get_review_assessment, get_review_text,
     read_output, load_org, load_config, run_reviewer_subprocess,
     export_clause_to_word, _get_personnel_for_doc,
@@ -29,10 +29,24 @@ _STATUS_PILL_KIND = {
 }
 
 
+def _normalize_status(raw: str) -> str:
+    """Strip brackets, take first option, uppercase. e.g. '[FAIL/WARN]' → 'FAIL'."""
+    s = re.sub(r"[\[\]]", "", raw).strip()   # remove [ ]
+    s = s.split("/")[0].strip()              # take first if FAIL/WARN
+    return s.upper()
+
+
 def _parse_findings_table(rev_text: str) -> list[dict]:
-    """Parse the ### Findings Table block into [{dim, status, finding}, ...]."""
+    """Parse the ### Findings Table block into [{dimension, status, finding}].
+
+    Handles both critic output formats:
+      3-col: | Dimension | Status | Finding |
+      4-col: | # | Check | Result | Detail |   (qwen2.5 default)
+    """
     rows: list[dict] = []
     in_table = False
+    header_cols: list[str] = []
+
     for ln in rev_text.splitlines():
         if "### Findings Table" in ln:
             in_table = True
@@ -44,15 +58,33 @@ def _parse_findings_table(rev_text: str) -> list[dict]:
         s = ln.strip()
         if not s.startswith("|"):
             continue
-        # Skip header & separator rows
-        if re.match(r"^\|\s*[-:|\s]+\|", s):
+        if re.match(r"^\|\s*[-:|\s]+\|", s):  # separator row
             continue
         cells = [c.strip() for c in s.strip("|").split("|")]
+
+        # Detect header row to know column layout
+        if not rows and not header_cols and any(
+            c.lower() in ("check", "dimension", "result", "status", "detail", "finding", "#")
+            for c in cells
+        ):
+            header_cols = [c.lower() for c in cells]
+            continue
+
         if len(cells) < 3:
             continue
-        dim, status, finding = cells[0], cells[1], " | ".join(cells[2:])
-        if dim.lower() in ("dimension", ""):
+
+        # 4-column: | # | Check | Result | Detail |
+        if len(cells) >= 4 and header_cols and header_cols[0] in ("#", "no", ""):
+            dim, raw_status, finding = cells[1], cells[2], " ".join(cells[3:])
+        else:
+            # 3-column legacy: | Dimension | Status | Finding |
+            dim, raw_status, finding = cells[0], cells[1], " | ".join(cells[2:])
+
+        # Skip header-value rows that slipped through
+        if dim.lower() in ("dimension", "check", "#", ""):
             continue
+
+        status = _normalize_status(raw_status)
         rows.append({"dimension": dim, "status": status, "finding": finding})
     return rows
 
@@ -160,8 +192,8 @@ def render() -> None:
     reviewer_enabled = cfg.get("critic", {}).get("enabled", False)
 
     pending = [
-        cid for cid in CLAUSE_NAMES
-        if get_clause_status(cid) in ("DRAFT", "REVISION")
+        cid for cid in get_active_clauses()
+        if get_clause_status(cid) in ("DRAFT", "REVISION", "PENDING", "GENERATING")
         and (OUTPUTS_DIR / f"{cid}.md").exists()
     ]
 
@@ -311,18 +343,22 @@ def render() -> None:
                 _status_data = json.loads(_sf.read_text(encoding="utf-8"))
             except Exception:
                 pass
-        if (
-            _status_data.get("status") == "REVISION"
-            and _status_data.get("notes", "").strip()
-        ):
-            if st.button(
-                "🔁 Re-generate using my notes", key=f"regen_{selected}",
-                use_container_width=True,
-                help="AI rewrites this document using the notes above as direct instructions, then re-runs the AI Reviewer.",
-            ):
+        _cf = OUTPUTS_DIR / f"{selected}.critic.md"
+        _has_ai_findings = _cf.exists()
+        _has_user_notes = bool(_status_data.get("notes", "").strip())
+        _review_failed = rev_code in ("FAIL", "CONDITIONAL PASS")
+        # Show regen button when: flagged for revision with notes, OR AI review found issues
+        if _status_data.get("status") == "REVISION" and (_has_user_notes or (_has_ai_findings and _review_failed)):
+            _btn_label = "🔁 Re-generate using review findings"
+            _btn_help = (
+                "AI rewrites this document using the AI Reviewer findings"
+                + (" and your notes" if _has_user_notes else "")
+                + ", then re-runs the AI Reviewer."
+            )
+            if st.button(_btn_label, key=f"regen_{selected}", use_container_width=True, help=_btn_help):
                 cfg = load_config()
                 org = load_org()
-                with st.spinner("Re-generating with your reviewer notes… this may take a few minutes."):
+                with st.spinner("Re-generating with review findings… this may take a few minutes."):
                     ok, msg = _pipeline.regenerate_with_user_notes(selected, cfg, org)
                 st.cache_data.clear()
                 (st.success if ok else st.error)(msg)
@@ -394,7 +430,7 @@ def render() -> None:
                 versions = []
             if versions:
                 with st.expander("Version History"):
-                    for v in reversed(versions):
+                    for i, v in enumerate(reversed(versions)):
                         vc1, vc2 = st.columns([5, 1])
                         with vc1:
                             ts = v.get("timestamp", "")[:16].replace("T", " ")
@@ -409,7 +445,7 @@ def render() -> None:
                                 event_tag = ""
                             st.caption(f"v{v['version']}  ·  {ts}{event_tag}")
                         with vc2:
-                            if st.button("Restore", key=f"restore_{selected}_v{v['version']}",
+                            if st.button("Restore", key=f"restore_{selected}_v{v['version']}_{i}",
                                          use_container_width=True):
                                 (OUTPUTS_DIR / f"{selected}.md").write_text(
                                     v["content"], encoding="utf-8"

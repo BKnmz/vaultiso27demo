@@ -15,7 +15,7 @@ if str(_UI_DIR) not in sys.path:
 
 from core import (
     load_config, completion_stats, get_clause_status,
-    CLAUSE_NAMES, OUTPUTS_DIR, __version__,
+    CLAUSE_NAMES, OUTPUTS_DIR, __version__, get_active_clauses,
 )
 from styles import CSS
 from icons import icon
@@ -43,8 +43,8 @@ def _render_sidebar(page: str, pending_count: int, cfg: dict) -> None:
     <div class="sidebar-brand">
       <div class="brand-mark">V</div>
       <div>
-        <div class="brand-name">VaultISO27 Demo</div>
-        <div class="brand-sub">ISO 27001:2022 · 5-clause edition</div>
+        <div class="brand-name">VaultISO27 <span class="demo-badge">DEMO</span></div>
+        <div class="brand-sub">ISO 27001:2022 · 10-clause edition</div>
       </div>
     </div>
     <div class="nav-label">Main</div>
@@ -101,7 +101,7 @@ def _route(page: str) -> None:
 def main() -> None:
     st.set_page_config(
         page_title="VaultISO27 Demo",
-        page_icon="V",
+        page_icon="🔓",
         layout="wide",
         initial_sidebar_state="expanded",
     )
@@ -113,7 +113,7 @@ def main() -> None:
         cfg = {"llm": {"model": "—"}}
 
     pending_docs = [
-        cid for cid in CLAUSE_NAMES
+        cid for cid in get_active_clauses()
         if get_clause_status(cid) in ("DRAFT", "REVISION")
         and (OUTPUTS_DIR / f"{cid}.md").exists()
     ]
