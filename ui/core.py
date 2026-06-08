@@ -209,43 +209,93 @@ ANNEX_A_EVIDENCE_FILE = OUTPUTS_DIR / "annex_a_evidence.json"
 ANNEX_A_STATUSES      = ["Not Assessed", "Implemented", "Partial", "Planned"]
 
 MODEL_GUIDE = [
-    {"Model": "phi4-mini:3.8b-q4_K_M", "Best for": "Document generation (default)",
-     "VRAM": "GPU+CPU split", "Speed": "~15 tok/s", "min_ram_gb": 0,
-     "Install": "ollama pull phi4-mini:3.8b-q4_K_M",
-     "tiers": ["low", "minimal"]},
-    {"Model": "qwen2.5:1.5b-q4_K_M", "Best for": "AI Reviewer (fastest)",
-     "VRAM": "Fully on GPU (~1.2 GB)", "Speed": "~30 tok/s", "min_ram_gb": 0,
+    # Reviewer — all tiers (tiny, fast, always recommended alongside any gen model)
+    {"Model": "qwen2.5:1.5b", "Best for": "AI Reviewer — all tiers",
+     "VRAM": "~0.9 GB (fits any GPU)", "Speed": "~30 tok/s", "min_ram_gb": 0,
      "Install": "ollama pull qwen2.5:1.5b",
-     "tiers": ["low", "minimal", "mid"]},
-    {"Model": "llama3.2:3b-q4_K_M", "Best for": "Document generation (alternative)",
-     "VRAM": "GPU+CPU split", "Speed": "~18 tok/s", "min_ram_gb": 8,
-     "Install": "ollama pull llama3.2:3b",
-     "tiers": ["mid"]},
-    {"Model": "mistral:7b-q4_K_M", "Best for": "High-end machines (8 GB+ VRAM)",
-     "VRAM": "~5 GB VRAM needed", "Speed": "~8 tok/s", "min_ram_gb": 16,
-     "Install": "ollama pull mistral:7b",
+     "tiers": ["minimal", "low", "cpu_rich", "mid", "high"]},
+    # Generators — ordered smallest to largest
+    {"Model": "qwen2.5:1.5b", "Best for": "Document generation — minimal (<8 GB RAM)",
+     "VRAM": "~0.9 GB", "Speed": "~25 tok/s", "min_ram_gb": 0,
+     "Install": "ollama pull qwen2.5:1.5b",
+     "tiers": ["minimal"]},
+    {"Model": "gemma4:e2b-it-qat", "Best for": "Document generation — standard (8–16 GB RAM)",
+     "VRAM": "~4.3 GB (GPU+CPU split)", "Speed": "~8 tok/s", "min_ram_gb": 8,
+     "Install": "ollama pull gemma4:e2b-it-qat",
+     "tiers": ["low"]},
+    {"Model": "gemma4:e4b-it-qat", "Best for": "Document generation — mid/CPU-rich (4+ GB VRAM or 16+ GB RAM)",
+     "VRAM": "~6.1 GB (GPU+CPU split)", "Speed": "~8 tok/s GPU / ~3 tok/s CPU", "min_ram_gb": 16,
+     "Install": "ollama pull gemma4:e4b-it-qat",
+     "tiers": ["mid", "cpu_rich"]},
+    {"Model": "gemma4:12b-it-qat", "Best for": "Document generation — high-end (8+ GB VRAM or 32+ GB RAM)",
+     "VRAM": "~7.2 GB", "Speed": "~12 tok/s", "min_ram_gb": 16,
+     "Install": "ollama pull gemma4:12b-it-qat",
      "tiers": ["high"]},
 ]
 
 
-@st.cache_data(ttl=300)
-def detect_hardware() -> dict:
-    """Detect RAM, VRAM, and CPU. Returns dict with ram_gb, vram_gb, cpu."""
-    try:
-        import psutil
-        ram_gb = round(psutil.virtual_memory().total / 1_073_741_824, 1)
-    except Exception:
-        ram_gb = 0
-    cpu = platform.processor() or platform.machine() or "Unknown CPU"
-    vram_gb = 0
+def _detect_vram_gb_ui() -> float:
+    """VRAM detection with NVIDIA + AMD/Intel fallback. Used by Streamlit UI."""
+    # 1. NVIDIA
     try:
         out = subprocess.check_output(
             ["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
             timeout=3, stderr=subprocess.DEVNULL,
         )
-        vram_gb = round(int(out.decode().strip().split()[0]) / 1024, 1)
+        return round(int(out.decode().strip().split()[0]) / 1024, 1)
     except Exception:
         pass
+    # 2. Windows registry (64-bit, covers AMD/Intel)
+    if platform.system() == "Windows":
+        try:
+            ps = (
+                "Get-ItemProperty -Path "
+                "'HKLM:\\SYSTEM\\ControlSet001\\Control\\Class\\"
+                "{4d36e968-e325-11ce-bfc1-08002be10318}\\0*' "
+                "-Name 'HardwareInformation.qwMemorySize' "
+                "-ErrorAction SilentlyContinue | "
+                "Measure-Object -Property 'HardwareInformation.qwMemorySize' "
+                "-Maximum | Select-Object -ExpandProperty Maximum"
+            )
+            out = subprocess.check_output(
+                ["powershell", "-NoProfile", "-Command", ps],
+                timeout=6, stderr=subprocess.DEVNULL,
+            )
+            raw = out.decode().strip()
+            if raw and raw != "0":
+                return round(int(raw) / 1_073_741_824, 1)
+        except Exception:
+            pass
+        # 3. WMI AdapterRAM (32-bit cap ~4 GB — last resort)
+        try:
+            ps2 = (
+                "Get-WmiObject Win32_VideoController | "
+                "Where-Object {$_.AdapterRAM -gt 0} | "
+                "Measure-Object AdapterRAM -Maximum | "
+                "Select-Object -ExpandProperty Maximum"
+            )
+            out = subprocess.check_output(
+                ["powershell", "-NoProfile", "-Command", ps2],
+                timeout=6, stderr=subprocess.DEVNULL,
+            )
+            raw = out.decode().strip()
+            if raw and raw != "0":
+                return round(int(raw) / 1_073_741_824, 1)
+        except Exception:
+            pass
+    return 0.0
+
+
+@st.cache_data(ttl=300)
+def detect_hardware() -> dict:
+    """Detect RAM, VRAM (NVIDIA + AMD/Intel), and CPU."""
+    try:
+        import psutil
+        ram_gb = round(psutil.virtual_memory().total / 1_073_741_824, 1)
+    except Exception:
+        ram_gb = 0.0
+    cpu     = platform.processor() or platform.machine() or "Unknown CPU"
+    vram_gb = _detect_vram_gb_ui()
     return {"ram_gb": ram_gb, "vram_gb": vram_gb, "cpu": cpu}
 
 # ---------------------------------------------------------------------------

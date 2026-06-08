@@ -19,7 +19,7 @@ github:
   token: ''
 llm:
   base_url: http://localhost:11434
-  model: phi4-mini:3.8b-q4_K_M
+  model: gemma4:e4b-it-qat
   num_gpu: 1
   temperature: 0.3
 paths:
@@ -46,6 +46,6 @@ rag:
 timeouts:
   detected_ram_gb: 19.8
   detected_vram_gb: 2.0
-  hardware_tier: low
-  model_swap_delay: 12
-  ollama_generate: 600
+  hardware_tier: cpu_rich
+  model_swap_delay: 15
+  ollama_generate: 900

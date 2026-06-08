@@ -14,7 +14,7 @@ echo    1. Verify Python 3.9+
 echo    2. Create a Python virtual environment
 echo    3. Install required packages  (~500 MB, needs internet)
 echo    4. Build the ISO 27001 knowledge base  (~90 MB, needs internet)
-echo    5. Pull the AI models via Ollama  (~3.3 GB, needs internet)
+echo    5. Pull AI models matched to your hardware via Ollama  (4-8 GB, needs internet)
 echo.
 echo  After first setup the tool runs 100%% offline.
 echo  ============================================================
@@ -135,22 +135,37 @@ if errorlevel 1 (
     echo       Download and install Ollama from:
     echo         https://ollama.com/download
     echo.
-    echo       After installing, open a new terminal and run:
-    echo         ollama pull phi4-mini:3.8b-q4_K_M   (document generator, ~2.4 GB)
-    echo         ollama pull qwen2.5:1.5b              (AI reviewer, ~0.9 GB)
+    echo       After installing, open a new terminal and run the commands shown
+    echo       in Settings ^> Model Guide after launching VaultISO27.
+    echo       They will match your detected hardware tier.
     echo.
     echo       Then run launch.bat to start the dashboard.
     echo.
 ) else (
     for /f "tokens=*" %%v in ('ollama --version 2^>^&1') do echo  [OK]  %%v
+
+    :: Resolve tier-optimal model tags from hardware detection (setup_config.py already ran)
+    set "GEN_MODEL="
+    set "REV_MODEL="
+    for /f "delims=" %%m in ('python "%SCRIPT_DIR%setup_config.py" --print-models 2^>nul') do (
+        if not defined GEN_MODEL (
+            set "GEN_MODEL=%%m"
+        ) else if not defined REV_MODEL (
+            set "REV_MODEL=%%m"
+        )
+    )
+    :: Fallback if detection failed
+    if not defined GEN_MODEL set "GEN_MODEL=gemma4:e2b-it-qat"
+    if not defined REV_MODEL set "REV_MODEL=qwen2.5:1.5b"
+
     echo.
-    echo  Pulling document generator model  (phi4-mini:3.8b-q4_K_M, ~2.4 GB)
+    echo  Pulling document generator model  (%GEN_MODEL%)
     echo  Press Ctrl+C to skip and pull models manually later.
     echo.
-    ollama pull phi4-mini:3.8b-q4_K_M
+    ollama pull %GEN_MODEL%
     echo.
-    echo  Pulling AI reviewer model  (qwen2.5:1.5b, ~0.9 GB)
-    ollama pull qwen2.5:1.5b
+    echo  Pulling AI reviewer model  (%REV_MODEL%)
+    ollama pull %REV_MODEL%
     echo.
     echo  [OK]  AI models ready
 )

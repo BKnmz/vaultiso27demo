@@ -628,45 +628,52 @@
   <div class="section-inner">
     <div class="section-label">Hardware guide</div>
     <h2>Recommended models by hardware tier</h2>
+    <p style="margin-bottom:24px;font-size:15px;color:var(--ink-3)">Tool detects your RAM and VRAM (NVIDIA, AMD, Intel) at install and selects the strongest model for your machine. All generators are <a href="https://ollama.com/library/gemma4" target="_blank" rel="noopener" style="color:var(--accent)">Gemma 4</a> (Google, 2025) — stronger per-parameter than 2023-era 7B models.</p>
     <div class="table-wrap">
       <table class="hw-table">
         <thead>
           <tr>
-            <th>Hardware</th>
-            <th>Role</th>
-            <th>Model</th>
-            <th>Speed</th>
+            <th>Tier</th>
+            <th>Condition</th>
+            <th>Generator model</th>
+            <th>Size</th>
           </tr>
         </thead>
         <tbody>
           <tr>
-            <td>2 GB VRAM (MX230 class)</td>
-            <td>Generator</td>
-            <td><code>phi4-mini:3.8b-q4_K_M</code></td>
-            <td>~15 tok/s</td>
+            <td>High-end</td>
+            <td>8 GB+ VRAM or 32 GB+ RAM</td>
+            <td><code>gemma4:12b-it-qat</code></td>
+            <td>7.2 GB</td>
           </tr>
           <tr>
-            <td>2 GB VRAM (MX230 class)</td>
-            <td>AI Reviewer</td>
-            <td><code>qwen2.5:1.5b-q4_K_M</code></td>
-            <td>~30 tok/s</td>
+            <td>Mid-range</td>
+            <td>4–8 GB VRAM</td>
+            <td><code>gemma4:e4b-it-qat</code></td>
+            <td>6.1 GB</td>
           </tr>
           <tr>
-            <td>4 GB+ VRAM</td>
-            <td>Generator</td>
-            <td><code>llama3.2:3b-q4_K_M</code></td>
-            <td>~18 tok/s</td>
+            <td>CPU-rich</td>
+            <td>16 GB+ RAM, &lt;4 GB VRAM</td>
+            <td><code>gemma4:e4b-it-qat</code></td>
+            <td>6.1 GB</td>
           </tr>
           <tr>
-            <td>8 GB+ VRAM</td>
-            <td>Generator</td>
-            <td><code>mistral:7b-q4_K_M</code></td>
-            <td>~8 tok/s</td>
+            <td>Standard</td>
+            <td>8–16 GB RAM</td>
+            <td><code>gemma4:e2b-it-qat</code></td>
+            <td>4.3 GB</td>
+          </tr>
+          <tr>
+            <td>Minimal</td>
+            <td>&lt;8 GB RAM, CPU-only</td>
+            <td><code>qwen2.5:1.5b</code></td>
+            <td>0.9 GB</td>
           </tr>
         </tbody>
       </table>
     </div>
-    <p class="hw-note">One model loads at a time (2 GB VRAM limit). Settings → Model Guide shows your detected tier and hardware specs after launch.</p>
+    <p class="hw-note">AI Reviewer: <code>qwen2.5:1.5b</code> on all tiers — tiny, fast, adversarial critique. One model loads at a time. Settings → Model Guide shows your detected tier after launch.</p>
   </div>
 </section>
 

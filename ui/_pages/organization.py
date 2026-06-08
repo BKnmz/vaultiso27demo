@@ -790,12 +790,19 @@ def _tab_model_guide() -> None:
     # Use hardware_tier from setup_config.py if available; else derive from live detection
     tier = cfg.get("timeouts", {}).get("hardware_tier", "")
     if not tier:
-        if ram >= 32 and vram >= 8:   tier = "high"
-        elif ram >= 16 and vram >= 4: tier = "mid"
-        elif ram >= 8:                tier = "low"
-        else:                          tier = "minimal"
+        if vram >= 8 or ram >= 32:  tier = "high"
+        elif vram >= 4:             tier = "mid"
+        elif ram >= 16:             tier = "cpu_rich"
+        elif ram >= 8:              tier = "low"
+        else:                       tier = "minimal"
 
-    tier_labels = {"high": "High-end", "mid": "Mid-range", "low": "Standard", "minimal": "Minimal"}
+    tier_labels = {
+        "high":     "High-end (8 GB+ VRAM or 32 GB+ RAM)",
+        "mid":      "Mid-range (4–8 GB VRAM)",
+        "cpu_rich": "CPU-rich (16 GB+ RAM, <4 GB VRAM)",
+        "low":      "Standard (8–16 GB RAM)",
+        "minimal":  "Minimal (<8 GB RAM, CPU-only)",
+    }
     st.info(
         f"**Detected hardware:** {hw_line}  \n"
         f"**Tier:** {tier_labels.get(tier, tier)} — models highlighted in teal are recommended for your machine."
@@ -842,7 +849,7 @@ def _tab_model_guide() -> None:
 **Important rules for limited GPU memory (2 GB):**
 - Only one model can run at a time
 - Ollama switches models automatically, but it adds ~10 seconds per switch
-- For machines with 8 GB+ VRAM, use mistral:7b for significantly better document quality
+- For machines with 8 GB+ VRAM, use gemma4:12b-it-qat for significantly better document quality
 
 **Offline operation:** After first setup, VaultISO27 runs 100% offline — no internet connection needed.
     """)

@@ -95,7 +95,7 @@ def check_ollama():
         models = [m["name"] for m in r.json().get("models", [])]
         log.info("Ollama running  OK  (models: %s)", ', '.join(models) if models else 'none pulled yet')
         if not models:
-            log.warning("No models pulled yet. Run: ollama pull phi4-mini:3.8b-q4_K_M")
+            log.warning("No models pulled yet. Check Settings > Model Guide for your tier's pull command.")
         else:
             gen_model = cfg.get("llm", {}).get("model", "")
             critic_model = cfg.get("critic", {}).get("model", "")

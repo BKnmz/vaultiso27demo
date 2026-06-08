@@ -17,16 +17,18 @@ Generates documents for **10 mandatory clauses** (4.1, 4.2, 4.3, 5.1, 5.2, 5.3, 
 
 ## Hardware detection & model guide
 
-At launch the tool reads your hardware profile and recommends the best model:
+At launch the tool detects your RAM and VRAM (NVIDIA, AMD, Intel) and recommends the best model for your machine. All recommended models are [Gemma 4](https://ollama.com/library/gemma4) (Google, 2025) — stronger per-parameter than 2023-era 7B models.
 
-| Hardware | Recommended model | Speed |
-|----------|------------------|-------|
-| 2 GB VRAM (e.g. MX230) | `phi4-mini:3.8b-q4_K_M` | ~15 tok/s |
-| 2 GB VRAM (reviewer) | `qwen2.5:1.5b` | ~30 tok/s |
-| 4 GB+ VRAM | `llama3.2:3b-q4_K_M` | ~18 tok/s |
-| 8 GB+ VRAM | `mistral:7b-q4_K_M` | ~8 tok/s |
+| Tier | Condition | Generator | Size |
+|------|-----------|-----------|------|
+| High-end | 8 GB+ VRAM or 32 GB+ RAM | `gemma4:12b-it-qat` | 7.2 GB |
+| Mid-range | 4–8 GB VRAM | `gemma4:e4b-it-qat` | 6.1 GB |
+| CPU-rich | 16 GB+ RAM, <4 GB VRAM | `gemma4:e4b-it-qat` | 6.1 GB |
+| Standard | 8–16 GB RAM | `gemma4:e2b-it-qat` | 4.3 GB |
+| Minimal | <8 GB RAM | `qwen2.5:1.5b` | 0.9 GB |
 
-Only one model runs at a time (VRAM limit). The **Settings → Model Guide** tab shows your detected tier and hardware specs.
+AI Reviewer: `qwen2.5:1.5b` on all tiers (tiny, fast, adversarial critique).  
+Only one model loads at a time (VRAM limit). **Settings → Model Guide** shows your detected tier and hardware specs.
 
 ---
 
