@@ -32,26 +32,29 @@ Only one model runs at a time (VRAM limit). The **Settings → Model Guide** tab
 
 ## Screenshots
 
-> **To add screenshots:** save `.png` files into `docs/screenshots/` and commit.
+### Dashboard — certification progress
+Stepper tracks organisation setup → document generation → review → audit readiness. Readiness %, Approved/Needs Attention metrics, and per-clause status at a glance.
 
-### Dashboard — progress tracker
-<!-- docs/screenshots/dashboard.png — stepper + clause status pills -->
 ![Dashboard](docs/screenshots/dashboard.png)
 
-### Generate — live document generation
-<!-- docs/screenshots/generate.png — Generate tab mid-run, live log stream -->
+### Generate — document generation
+Batch or single-clause generation. Live log stream shows each clause as it is drafted. Engine panel shows active model, reviewer, temperature, and RAG chunk count.
+
 ![Generate](docs/screenshots/generate.png)
 
 ### Review — AI Reviewer findings
-<!-- docs/screenshots/review.png — PASS/FAIL pill task list, Approve/Flag buttons -->
+Per-clause AI Reviewer report with PASS / FAIL / WARN per ISO 27001 dimension. "What needs fixing" callout for non-PASS verdicts. Approve or flag for revision.
+
 ![Review](docs/screenshots/review.png)
 
 ### Documents — export centre
-<!-- docs/screenshots/documents.png — clause list with Word download buttons -->
+Browse all generated clauses with status and AI review badges. Download individual Word (.docx) files or the full set as a zip.
+
 ![Documents](docs/screenshots/documents.png)
 
-### Annex A — evidence tracker
-<!-- docs/screenshots/annex_a.png — controls with applicable toggle + status -->
+### Annex A controls — evidence tracker
+21-control evidence tracker with visual theme map. Toggle applicability, set implementation status, add justification and evidence references. Export Statement of Applicability to Excel.
+
 ![Annex A](docs/screenshots/annex_a.png)
 
 ---
@@ -76,13 +79,20 @@ launch.bat       :: start dashboard — open http://localhost:8501
 
 ## Demo scope
 
+10 mandatory clauses included:
+
 | Clause | Document |
 |--------|----------|
 | 4.1 | Context of the Organization |
+| 4.2 | Interested Parties |
 | 4.3 | ISMS Scope |
+| 5.1 | Leadership Commitment |
 | 5.2 | Information Security Policy |
+| 5.3 | Organizational Roles and Responsibilities |
 | 6.1 | Risk Planning |
-| 8.2 | Risk Assessment |
+| 6.1.2 | Risk Assessment |
+| 6.1.3 | Risk Treatment |
+| 6.2 | Security Objectives |
 
 Full 23-clause tool → [BKnmz/VaultISO27](https://github.com/BKnmz/VaultISO27)
 

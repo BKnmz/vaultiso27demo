@@ -700,7 +700,7 @@ def export_all_to_excel(org_name=""):
                 ws2.cell(row=li, column=1, value=line)
             ws2.column_dimensions["A"].width = 120
             for tbl_data in tables:
-                sheet_name = f"{cid} {tbl_data['title']}"[:31]
+                sheet_name = re.sub(r'[\\/*?:\[\]]', '-', f"{cid} {tbl_data['title']}")[:31]
                 wst = wb.create_sheet(title=sheet_name)
                 wst.cell(row=1, column=1, value=f"{cid}: {tbl_data['title']}").font = Font(bold=True, size=12)
                 for ci, h in enumerate(tbl_data["headers"], 1):
