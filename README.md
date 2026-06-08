@@ -129,4 +129,4 @@ All inference local. All data local. Zero telemetry.
 
 The audit checklist (`rag/ISO27001_Audit_Checklist_demo.xlsx`) contains original paraphrases of 21 Annex A controls — not verbatim ISO text. See the **LEGAL_NOTICE** sheet inside the file and [NOTICE.md](NOTICE.md) for details.
 
-Generated documents are drafts. Review against the official standard before any certification process. Source code: MIT License. Checklist paraphrases: CC BY 4.0.
+Generated documents are drafts. Review against the official standard before any certification process. Source code: [Elastic License 2.0](LICENSE) — free for internal use, no redistribution. Checklist paraphrases: CC BY 4.0.

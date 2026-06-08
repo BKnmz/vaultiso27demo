@@ -2,7 +2,9 @@
 
 ## Software License
 
-VaultISO27 source code is released under the MIT License. See [LICENSE](LICENSE) for details.
+VaultISO27 source code is released under the **Elastic License 2.0 (ELv2)**. See [LICENSE](LICENSE) for full terms.
+
+**Summary:** You may use, run, and modify this software for internal or personal use at no cost. You may not redistribute it as a standalone product, publish a fork as a competing tool, or offer it as a hosted/managed service.
 
 ## ISO/IEC 27001:2022
 
