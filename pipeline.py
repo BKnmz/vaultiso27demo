@@ -209,11 +209,18 @@ def call_ollama(base_url, model_name, prompt, temperature=0.2, timeout=600):
         "model": model_name,
         "prompt": prompt,
         "stream": False,
-        "keep_alive": 0,
+        # Keep the generator warm between consecutive clause generations —
+        # keep_alive: 0 forced a cold reload (60-120s) on every single call.
+        # The reviewer swap still evicts it (2 GB VRAM can't hold both), but
+        # back-to-back generations no longer pay the reload tax.
+        "keep_alive": "5m",
         "options": {
             "temperature": temperature,
             "num_predict": 1500,
-            "num_ctx": 4096,
+            # 6144 (was 4096): revision prompts now carry up to 5000 chars of
+            # document + findings; 4096 risked silent head-truncation that
+            # drops the instructions before the model sees them.
+            "num_ctx": 6144,
         },
     }
     try:
@@ -411,7 +418,7 @@ def run_revision_loop(clause_id, cfg, org, out_file, max_revisions):
             org_industry=org.get("industry", ""),
             user_notes_block="",
             critic_findings=findings,
-            document=document[:3000],
+            document=document[:5000],  # fits num_ctx 6144; was 3000 — large drafts lost the sections under review
         )
 
         # Unload reviewer model before generator — only one model fits in VRAM at a time
@@ -523,7 +530,7 @@ def regenerate_with_user_notes(clause_id, cfg, org):
         org_industry=org.get("industry", ""),
         ai_findings_block=ai_findings_block,
         user_notes_block=user_notes_block,
-        document=document[:3000],
+        document=document[:5000],  # fits num_ctx 6144; was 3000 — regen couldn't see the sections users flagged
     )
 
     # Unload reviewer model before loading generator — VRAM can only hold one at a time

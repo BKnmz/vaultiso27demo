@@ -136,21 +136,29 @@ PERFORM THESE FIVE CHECKS:
 5. AUDIT READINESS — Would an experienced ISO 27001:2022 external auditor accept this document
    as conforming evidence during a Stage 2 certification audit?
 
-OUTPUT FORMAT — respond in this exact structure (fill every field — do NOT copy placeholder text):
+VERDICT RULES:
+- PASS — all mandatory requirements satisfied, document is audit-ready.
+- CONDITIONAL PASS — requirements substantially met but minor gaps need fixing.
+- FAIL — one or more mandatory requirements missing or the document could not serve as audit evidence.
+Base every finding on the actual text of the DOCUMENT UNDER REVIEW above. Quote or reference
+its real section numbers and content. Do not invent findings about sections that exist.
+
+OUTPUT FORMAT — respond in this exact structure. Every [bracketed] field is a placeholder:
+replace it with your own finding about THIS document. Never output brackets.
 
 ## Critic Review — Clause {clause_id}: {clause_name}
 
-**Overall Assessment:** FAIL
-**Confidence:** HIGH
+**Overall Assessment:** [PASS, CONDITIONAL PASS, or FAIL — per the verdict rules]
+**Confidence:** [HIGH, MEDIUM, or LOW]
 
 ### Findings Table
 | # | Check | Result | Detail |
 |---|-------|--------|--------|
-| 1 | ISO Mapping | PASS | All mandatory shall-requirements for clause 4.1 are explicitly addressed. |
-| 2 | Completeness | FAIL | Section 3 is missing — add specific internal issue analysis. |
-| 3 | Org Specificity | WARN | Generic statements in section 2 should reference actual departments. |
-| 4 | Internal Consistency | PASS | No contradictions found in scope or roles. |
-| 5 | Audit Readiness | FAIL | Document would not pass Stage 2 audit without the missing section. |
+| 1 | ISO Mapping | [one word: PASS, FAIL, or WARN] | [one sentence: which clause {clause_id} requirements are or are not addressed] |
+| 2 | Completeness | [one word: PASS, FAIL, or WARN] | [one sentence: which sections of this document are substantive, vague, or missing] |
+| 3 | Org Specificity | [one word: PASS, FAIL, or WARN] | [one sentence: is the text specific to {org_name} or generic] |
+| 4 | Internal Consistency | [one word: PASS, FAIL, or WARN] | [one sentence: any contradictions found, or none] |
+| 5 | Audit Readiness | [one word: PASS, FAIL, or WARN] | [one sentence: would a Stage 2 auditor accept this document] |
 
 IMPORTANT: In the Result column write exactly one word — PASS, FAIL, or WARN. No brackets, no slashes, no other text.
 
@@ -193,7 +201,9 @@ def call_ollama(base_url, model, prompt, temperature=0.1, timeout=600):
         "options": {
             "temperature": temperature,
             "num_predict": 1200,
-            "num_ctx": 4096,
+            # 6144 (was 4096): the reviewed document cap rose 3000→5000 chars;
+            # 4096 risked silent head-truncation of the audit instructions.
+            "num_ctx": 6144,
         },
     }
     for attempt in range(1, 3):
@@ -259,10 +269,13 @@ def parse_overall_assessment(critic_output):
     """Extract the overall assessment from critic markdown output."""
     for line in critic_output.splitlines():
         if "**Overall Assessment:**" in line:
-            if "FAIL" in line.upper():
-                return "FAIL"
-            elif "CONDITIONAL" in line.upper():
+            if "[" in line:
+                # Unfilled placeholder echoed back — not a real verdict.
+                return "UNKNOWN"
+            if "CONDITIONAL" in line.upper():
                 return "CONDITIONAL PASS"
+            elif "FAIL" in line.upper():
+                return "FAIL"
             elif "PASS" in line.upper():
                 return "PASS"
     return "UNKNOWN"
@@ -307,7 +320,7 @@ def run_critic(clause_id, cfg, org, force=False):
         org_size=org.get("size", ""),
         org_scope=org.get("scope", ""),
         legal_basis=", ".join(org.get("legal_basis", [])),
-        document=document[:3000],  # cap to avoid context overflow on small models
+        document=document[:5000],  # cap to fit num_ctx 6144 — covers most full drafts (4.1 is 8.5 KB, still partial)
         revision_instructions=REVISION_INSTRUCTIONS_TEMPLATE,
     )
 

@@ -155,7 +155,7 @@ if errorlevel 1 (
         )
     )
     :: Fallback if detection failed
-    if not defined GEN_MODEL set "GEN_MODEL=gemma4:e2b-it-qat"
+    if not defined GEN_MODEL set "GEN_MODEL=phi4-mini:3.8b-q4_K_M"
     if not defined REV_MODEL set "REV_MODEL=qwen2.5:1.5b"
 
     echo.

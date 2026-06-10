@@ -17,18 +17,18 @@ Generates documents for **10 mandatory clauses** (4.1, 4.2, 4.3, 5.1, 5.2, 5.3, 
 
 ## Hardware detection & model guide
 
-At launch the tool detects your RAM and VRAM (NVIDIA, AMD, Intel) and recommends the best model for your machine. All recommended models are [Gemma 4](https://ollama.com/library/gemma4) (Google, 2025) — stronger per-parameter than 2023-era 7B models.
+At launch the tool detects your RAM and VRAM (NVIDIA, AMD, Intel) and recommends the best model for your machine — **speed-first**: a model only qualifies for a tier if it fits that tier's VRAM (GPU speed) or is small enough to run tolerably on CPU+RAM. A bigger model that spills out of VRAM runs 5–10x slower and is never recommended.
 
-| Tier | Condition | Generator | Size |
-|------|-----------|-----------|------|
-| High-end | 8 GB+ VRAM or 32 GB+ RAM | `gemma4:12b-it-qat` | 7.2 GB |
-| Mid-range | 4–8 GB VRAM | `gemma4:e4b-it-qat` | 6.1 GB |
-| CPU-rich | 16 GB+ RAM, <4 GB VRAM | `gemma4:e4b-it-qat` | 6.1 GB |
-| Standard | 8–16 GB RAM | `gemma4:e2b-it-qat` | 4.3 GB |
-| Minimal | <8 GB RAM | `qwen2.5:1.5b` | 0.9 GB |
+| Tier | Condition | Generator | Size | ≈ per document |
+|------|-----------|-----------|------|----------------|
+| High-end | 12 GB+ VRAM | [`gemma4:12b-it-qat`](https://ollama.com/library/gemma4) | 7.2 GB | ~1–2 min |
+| Mid-range | 6–12 GB VRAM | `gemma4:e4b-it-qat` | 6.1 GB | ~2–4 min |
+| CPU-rich | 16 GB+ RAM, <6 GB VRAM | `phi4-mini:3.8b-q4_K_M` | 2.5 GB | ~8–15 min |
+| Standard | 8–16 GB RAM | `phi4-mini:3.8b-q4_K_M` | 2.5 GB | ~10–20 min |
+| Minimal | <8 GB RAM | `qwen2.5:1.5b` | 0.9 GB | ~5–10 min (quality limited) |
 
 AI Reviewer: `qwen2.5:1.5b` on all tiers (tiny, fast, adversarial critique).  
-Only one model loads at a time (VRAM limit). **Settings → Model Guide** shows your detected tier and hardware specs.
+Only one model loads at a time (VRAM limit). **Settings → Model Guide** shows your detected tier, why that model was chosen, and the expected speed.
 
 ---
 

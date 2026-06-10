@@ -787,25 +787,36 @@ def _tab_model_guide() -> None:
     cpu = hw["cpu"]
     hw_line = f"{cpu} · {ram} GB RAM" + (f" · {vram} GB VRAM" if vram else " · No NVIDIA GPU detected")
 
-    # Use hardware_tier from setup_config.py if available; else derive from live detection
+    # Use hardware_tier from setup_config.py if available; else derive from live detection.
+    # VRAM-fit first: a tier only gets a big model if the model fits the card's VRAM —
+    # RAM alone never qualifies for a big model (it would spill to CPU and run 5-10x slower).
     tier = cfg.get("timeouts", {}).get("hardware_tier", "")
     if not tier:
-        if vram >= 8 or ram >= 32:  tier = "high"
-        elif vram >= 4:             tier = "mid"
-        elif ram >= 16:             tier = "cpu_rich"
-        elif ram >= 8:              tier = "low"
-        else:                       tier = "minimal"
+        if vram >= 12:   tier = "high"
+        elif vram >= 6:  tier = "mid"
+        elif ram >= 16:  tier = "cpu_rich"
+        elif ram >= 8:   tier = "low"
+        else:            tier = "minimal"
 
     tier_labels = {
-        "high":     "High-end (8 GB+ VRAM or 32 GB+ RAM)",
-        "mid":      "Mid-range (4–8 GB VRAM)",
-        "cpu_rich": "CPU-rich (16 GB+ RAM, <4 GB VRAM)",
+        "high":     "High-end (12 GB+ VRAM)",
+        "mid":      "Mid-range (6–12 GB VRAM)",
+        "cpu_rich": "CPU-rich (16 GB+ RAM, <6 GB VRAM)",
         "low":      "Standard (8–16 GB RAM)",
         "minimal":  "Minimal (<8 GB RAM, CPU-only)",
     }
+    tier_why = {
+        "high":     "Your GPU fits the largest model entirely in VRAM — best quality at GPU speed (~1–2 min per document).",
+        "mid":      "Your GPU fits a strong mid-size model in VRAM — good quality at GPU speed (~2–4 min per document).",
+        "cpu_rich": "No model worth running fits your VRAM, so generation runs on CPU+RAM. A small fast model "
+                    "(phi4-mini) beats a large one spilling out of VRAM at 5–10x slower (~8–15 min per document).",
+        "low":      "Limited RAM and no usable VRAM — a small fast model keeps generation usable (~10–20 min per document).",
+        "minimal":  "Very limited RAM — only the smallest model runs; quality is limited (~5–10 min per document).",
+    }
     st.info(
         f"**Detected hardware:** {hw_line}  \n"
-        f"**Tier:** {tier_labels.get(tier, tier)} — models highlighted in teal are recommended for your machine."
+        f"**Tier:** {tier_labels.get(tier, tier)} — models highlighted in teal are recommended for your machine.  \n"
+        f"**Why this recommendation:** {tier_why.get(tier, '')}"
     )
 
     col_redetect, _ = st.columns([1, 3])
@@ -834,6 +845,7 @@ def _tab_model_guide() -> None:
             f'<div style="font-size:12px;color:var(--ink-3);margin:4px 0 12px">{m["Best for"]}</div>'
             f'<div class="meta-row"><span class="k">VRAM</span><span class="v mono">{m["VRAM"]}</span></div>'
             f'<div class="meta-row"><span class="k">Speed</span><span class="v mono">{m["Speed"]}</span></div>'
+            f'<div class="meta-row"><span class="k">Time</span><span class="v mono">{m.get("Doc time", "—")}</span></div>'
             f'<div style="margin-top:12px;background:var(--surface-3);border-radius:6px;'
             f'padding:8px 10px;font-family:var(--font-mono);font-size:11.5px;color:var(--ink-2)">'
             f'{m["Install"]}</div>'
@@ -846,10 +858,12 @@ def _tab_model_guide() -> None:
     st.markdown("""
 **How to install** — open a terminal and run the install command shown in the card.
 
-**Important rules for limited GPU memory (2 GB):**
+**Important rules for limited GPU memory (<6 GB):**
 - Only one model can run at a time
-- Ollama switches models automatically, but it adds ~10 seconds per switch
-- For machines with 8 GB+ VRAM, use gemma4:12b-it-qat for significantly better document quality
+- Ollama switches models automatically, but each generator↔reviewer switch costs a model reload
+- Bigger is not faster here: a model that doesn't fit your VRAM spills to CPU and runs 5–10x slower —
+  the recommended model is the best quality your machine can run at usable speed
+- For machines with 12 GB+ VRAM, gemma4:12b-it-qat gives significantly better document quality
 
 **Offline operation:** After first setup, VaultISO27 runs 100% offline — no internet connection needed.
     """)

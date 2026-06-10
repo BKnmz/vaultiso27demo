@@ -2,7 +2,7 @@
 VaultISO27 — backend core: constants, data helpers, export functions.
 Imported by app.py (routing shell) and all page modules.
 """
-__version__ = "0.4.0"
+__version__ = "0.4.2"
 import io
 import json
 import platform
@@ -208,27 +208,40 @@ ANNEX_A_CONTROLS: dict[str, dict] = {
 ANNEX_A_EVIDENCE_FILE = OUTPUTS_DIR / "annex_a_evidence.json"
 ANNEX_A_STATUSES      = ["Not Assessed", "Implemented", "Partial", "Planned"]
 
+# Speed-first lineup: a generator is only recommended for a tier if it FITS
+# that tier's VRAM (GPU speed) or is small enough to run tolerably on CPU+RAM.
+# A bigger model that spills out of VRAM runs 5-10x slower — never recommended.
 MODEL_GUIDE = [
     # Reviewer — all tiers (tiny, fast, always recommended alongside any gen model)
     {"Model": "qwen2.5:1.5b", "Best for": "AI Reviewer — all tiers",
-     "VRAM": "~0.9 GB (fits any GPU)", "Speed": "~30 tok/s", "min_ram_gb": 0,
+     "VRAM": "~0.9 GB (fits any GPU)", "Speed": "~30 tok/s",
+     "Doc time": "~2 min per review",
      "Install": "ollama pull qwen2.5:1.5b",
      "tiers": ["minimal", "low", "cpu_rich", "mid", "high"]},
     # Generators — ordered smallest to largest
-    {"Model": "qwen2.5:1.5b", "Best for": "Document generation — minimal (<8 GB RAM)",
-     "VRAM": "~0.9 GB", "Speed": "~25 tok/s", "min_ram_gb": 0,
+    {"Model": "qwen2.5:1.5b", "Best for": "Document generation — minimal (<8 GB RAM). Last resort; quality limited.",
+     "VRAM": "~0.9 GB", "Speed": "~25 tok/s",
+     "Doc time": "~5–10 min per document",
      "Install": "ollama pull qwen2.5:1.5b",
      "tiers": ["minimal"]},
-    {"Model": "gemma4:e2b-it-qat", "Best for": "Document generation — standard (8–16 GB RAM)",
-     "VRAM": "~4.3 GB (GPU+CPU split)", "Speed": "~8 tok/s", "min_ram_gb": 8,
-     "Install": "ollama pull gemma4:e2b-it-qat",
-     "tiers": ["low"]},
-    {"Model": "gemma4:e4b-it-qat", "Best for": "Document generation — mid/CPU-rich (4+ GB VRAM or 16+ GB RAM)",
-     "VRAM": "~6.1 GB (GPU+CPU split)", "Speed": "~8 tok/s GPU / ~3 tok/s CPU", "min_ram_gb": 16,
+    {"Model": "phi4-mini:3.8b-q4_K_M",
+     "Best for": "Document generation — standard / CPU-rich (<6 GB VRAM). "
+                 "Fast default: small enough to run on CPU+RAM without the 5-10x slowdown of a spilled large model.",
+     "VRAM": "~2.5 GB", "Speed": "~3–5 tok/s CPU / ~15 tok/s GPU",
+     "Doc time": "~8–15 min per document on CPU",
+     "Install": "ollama pull phi4-mini:3.8b-q4_K_M",
+     "tiers": ["low", "cpu_rich"]},
+    {"Model": "gemma4:e4b-it-qat",
+     "Best for": "Document generation — mid-range (6–12 GB VRAM, fits in VRAM). "
+                 "Optional on CPU-rich machines: better quality but ~3x slower than phi4-mini.",
+     "VRAM": "~6.1 GB", "Speed": "~10 tok/s GPU / ~2 tok/s CPU",
+     "Doc time": "~2–4 min per document on GPU",
      "Install": "ollama pull gemma4:e4b-it-qat",
-     "tiers": ["mid", "cpu_rich"]},
-    {"Model": "gemma4:12b-it-qat", "Best for": "Document generation — high-end (8+ GB VRAM or 32+ GB RAM)",
-     "VRAM": "~7.2 GB", "Speed": "~12 tok/s", "min_ram_gb": 16,
+     "tiers": ["mid"]},
+    {"Model": "gemma4:12b-it-qat",
+     "Best for": "Document generation — high-end (12 GB+ VRAM, fits in VRAM). Best quality at GPU speed.",
+     "VRAM": "~7.2 GB", "Speed": "~12 tok/s",
+     "Doc time": "~1–2 min per document",
      "Install": "ollama pull gemma4:12b-it-qat",
      "tiers": ["high"]},
 ]
