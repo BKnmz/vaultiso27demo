@@ -152,6 +152,58 @@ def get_rag_context(collection, model, clause_id, top_k=3):
 
 
 # ---------------------------------------------------------------------------
+# Guidance RAG (owned ISMS PDFs) + structure exemplars — optional, fail-soft
+# ---------------------------------------------------------------------------
+
+# Generic ISO-document structure exemplars (headings only — not copyrightable).
+EXEMPLAR_DIR = Path(__file__).parent / "rag" / "exemplars"
+
+
+def get_guidance_context(cfg, embed_model, clause_id):
+    """Retrieve supporting snippets from the user's own guidance PDFs.
+
+    Returns a labelled context block, or "" if the feature is off, the index is
+    missing, or anything fails. Never raises — generation must work without it.
+    """
+    rag = cfg.get("rag", {})
+    if not rag.get("use_guidance_rag"):
+        return ""
+    try:
+        client = chromadb.PersistentClient(path=str(rag["chroma_db_path"]))
+        coll = client.get_collection(rag.get("guidance_collection", "iso27001_guidance"))
+        query = f"ISO 27001 clause {clause_id} {CLAUSE_NAMES_PIPELINE.get(clause_id, '')}"
+        emb = embed_model.encode([query]).tolist()
+        k = int(rag.get("guidance_top_k", 2))
+        res = coll.query(query_embeddings=emb, n_results=k)
+        snippets = res.get("documents", [[]])[0]
+        if not snippets:
+            return ""
+        body = "\n\n".join(s.strip() for s in snippets if s.strip())
+        return ("Reference guidance (from your own ISMS library — use as supporting "
+                f"material, adapt to this organization):\n{body}")
+    except Exception as e:
+        log.warning("Guidance RAG unavailable for %s: %s", clause_id, e)
+        return ""
+
+
+def get_structure_exemplar(cfg, clause_id):
+    """Return a 'match this structure' block from rag/exemplars/<clause>.md, or ""."""
+    if not cfg.get("generation", {}).get("use_structure_exemplars"):
+        return ""
+    f = EXEMPLAR_DIR / f"{clause_id}.md"
+    if not f.exists():
+        return ""
+    try:
+        skeleton = f.read_text(encoding="utf-8").strip()
+    except Exception:
+        return ""
+    if not skeleton:
+        return ""
+    return ("FORMAT EXAMPLE — match this document STRUCTURE (headings/sections), "
+            f"not the content:\n{skeleton}")
+
+
+# ---------------------------------------------------------------------------
 # Upstream context
 # ---------------------------------------------------------------------------
 
@@ -202,24 +254,23 @@ def build_upstream_context(clause_id, outputs_dir):
 # Ollama call
 # ---------------------------------------------------------------------------
 
-def call_ollama(base_url, model_name, prompt, temperature=0.2, timeout=600):
-    """Send prompt to Ollama and return generated text."""
+def call_ollama(base_url, model_name, prompt, temperature=0.2, timeout=600, num_predict=1200):
+    """Send prompt to Ollama and return generated text.
+
+    num_predict: max tokens to generate — read from cfg["llm"]["num_predict"] by
+    callers that have a config; defaults to 1200 so call sites without cfg still work.
+    """
     url = f"{base_url}/api/generate"
     payload = {
         "model": model_name,
         "prompt": prompt,
-        "stream": False,
-        # Keep the generator warm between consecutive clause generations —
-        # keep_alive: 0 forced a cold reload (60-120s) on every single call.
-        # The reviewer swap still evicts it (2 GB VRAM can't hold both), but
-        # back-to-back generations no longer pay the reload tax.
+        # Keep the generator warm between consecutive calls — was cold-reloading
+        # (60-120 s) on every generation on low-VRAM machines.
         "keep_alive": "5m",
+        "stream": False,
         "options": {
             "temperature": temperature,
-            "num_predict": 1500,
-            # 6144 (was 4096): revision prompts now carry up to 5000 chars of
-            # document + findings; 4096 risked silent head-truncation that
-            # drops the instructions before the model sees them.
+            "num_predict": num_predict,
             "num_ctx": 6144,
         },
     }
@@ -259,18 +310,6 @@ WRITING STYLE — apply strictly to all output:
 - Auditor-facing tone: factual, unambiguous, defensible
 - Use ISO 27001:2022 terminology exactly as written in the standard
 
-REGULATORY AND STANDARDS GLOSSARY — use these exact descriptions, never invent alternatives:
-- TISAX: Trusted Information Security Assessment Exchange — automotive industry information security assessment framework governed by the VDA (Verband der Automobilindustrie)
-- GDPR: General Data Protection Regulation — EU Regulation 2016/679 on personal data protection
-- NIS2: Network and Information Security Directive 2 — EU Directive 2022/2555 on cybersecurity measures
-- ISO 27001 / ISO/IEC 27001:2022: International standard for information security management systems
-- ASPICE: Automotive SPICE (Software Process Improvement and Capability dEtermination) — process assessment framework for automotive software
-- UN R155 / UNR155: UN Regulation No. 155 — cybersecurity and cybersecurity management systems for vehicles
-- ISO 26262: International standard for functional safety of road vehicles
-- SOC 2: Service Organization Control 2 — AICPA trust services criteria for security, availability, processing integrity, confidentiality, and privacy
-- PCI-DSS: Payment Card Industry Data Security Standard
-- HIPAA: Health Insurance Portability and Accountability Act — US healthcare data privacy law
-
 """
 
 REVISION_PROMPT = """\
@@ -301,26 +340,28 @@ CRITICAL: Output ONLY the revised document body. Do NOT include:
 """
 
 USER_REVISION_PROMPT = """\
-You are an ISO 27001:2022 compliance specialist revising a draft ISMS document.
+You are an ISO 27001:2022 compliance specialist revising a draft ISMS document based on human reviewer instructions.
 
 CLAUSE: {clause_id} — {clause_name}
 ORGANIZATION: {org_name} | {org_size} | {org_industry}
 
-{ai_findings_block}{user_notes_block}
+HUMAN REVIEWER INSTRUCTIONS (authoritative — address all points):
+{user_notes}
+
 CURRENT DRAFT:
 {document}
 
-TASK: Produce a revised version that fully addresses ALL instructions above.
-- Keep sections not mentioned — do not remove content unnecessarily.
+TASK: Produce a revised version that fully addresses the reviewer's instructions above.
+- Keep sections not mentioned by the reviewer — do not remove content unnecessarily.
 - Be specific to {org_name}. Do not add generic filler.
-- Do not invent requirements not in the draft.
+- Do not invent requirements not already in the draft.
 - Formal third-person only. No "our", "we", "us".
 
 OUTPUT FORMAT: Markdown with numbered section headers matching the original structure.
 
 CRITICAL: Output ONLY the revised document body. Do NOT include:
 - A "Changes Made", "Revisions", "Auditor Findings", or "Changelog" section
-- Word counts or meta-commentary
+- Word counts or meta-commentary (e.g. "(Word Count: ~350)")
 - References to "the reviewer" in the document body
 - Any preamble such as "Here is the revised document:"
 """
@@ -418,20 +459,8 @@ def run_revision_loop(clause_id, cfg, org, out_file, max_revisions):
             org_industry=org.get("industry", ""),
             user_notes_block="",
             critic_findings=findings,
-            document=document[:5000],  # fits num_ctx 6144; was 3000 — large drafts lost the sections under review
+            document=document[:6000],
         )
-
-        # Unload reviewer model before generator — only one model fits in VRAM at a time
-        reviewer_model = cfg.get("critic", {}).get("model", "")
-        if reviewer_model:
-            try:
-                requests.post(
-                    f"{cfg['llm']['base_url']}/api/generate",
-                    json={"model": reviewer_model, "keep_alive": 0},
-                    timeout=15,
-                )
-            except Exception:
-                pass
 
         revised = call_ollama(
             cfg["llm"]["base_url"],
@@ -439,6 +468,7 @@ def run_revision_loop(clause_id, cfg, org, out_file, max_revisions):
             revision_prompt,
             cfg["llm"]["temperature"],
             timeout=cfg.get("timeouts", {}).get("ollama_generate", 600),
+            num_predict=cfg["llm"].get("num_predict", 1200),
         )
         out_file.write_text(revised, encoding="utf-8")
 
@@ -484,43 +514,13 @@ def regenerate_with_user_notes(clause_id, cfg, org):
         return False, f"Could not read status file: {e}"
 
     user_notes = status_data.get("notes", "").strip()
-
-    # Read AI reviewer findings from critic.md (Required Revisions section only)
-    critic_file = outputs_dir / f"{clause_id}.critic.md"
-    ai_findings = ""
-    if critic_file.exists():
-        try:
-            ctext = critic_file.read_text(encoding="utf-8")
-            in_rev = False
-            rev_lines = []
-            for ln in ctext.splitlines():
-                if "### Required Revisions" in ln:
-                    in_rev = True
-                    continue
-                if in_rev and ln.strip().startswith("###"):
-                    break
-                if in_rev and ln.strip():
-                    rev_lines.append(ln.strip())
-            ai_findings = "\n".join(rev_lines).strip()
-        except Exception:
-            pass
-
-    if not user_notes and not ai_findings:
-        return False, "No reviewer notes or AI findings. Add notes in the Decision notes box or run the AI Reviewer first."
+    if not user_notes:
+        return False, "No reviewer notes found. Add notes in the Decision notes box and flag the document first."
 
     if not out_file.exists():
         return False, f"No generated document found for {clause_id}."
 
     document = out_file.read_text(encoding="utf-8", errors="replace")
-
-    ai_findings_block = (
-        f"AI REVIEWER FINDINGS (must fix):\n{ai_findings}\n\n"
-        if ai_findings else ""
-    )
-    user_notes_block = (
-        f"HUMAN REVIEWER INSTRUCTIONS (authoritative):\n{user_notes}\n\n"
-        if user_notes else ""
-    )
 
     revision_prompt = USER_REVISION_PROMPT.format(
         clause_id=clause_id,
@@ -528,23 +528,9 @@ def regenerate_with_user_notes(clause_id, cfg, org):
         org_name=org.get("name", ""),
         org_size=org.get("size", ""),
         org_industry=org.get("industry", ""),
-        ai_findings_block=ai_findings_block,
-        user_notes_block=user_notes_block,
-        document=document[:5000],  # fits num_ctx 6144; was 3000 — regen couldn't see the sections users flagged
+        user_notes=user_notes,
+        document=document[:6000],
     )
-
-    # Unload reviewer model before loading generator — VRAM can only hold one at a time
-    reviewer_model = cfg.get("critic", {}).get("model", "")
-    if reviewer_model:
-        try:
-            requests.post(
-                f"{cfg['llm']['base_url']}/api/generate",
-                json={"model": reviewer_model, "keep_alive": 0},
-                timeout=15,
-            )
-            log.info("[USER-REGEN] unloaded reviewer model %s from VRAM", reviewer_model)
-        except Exception:
-            pass
 
     log.info("[USER-REGEN] %s — regenerating with reviewer notes", clause_id)
     revised = call_ollama(
@@ -553,6 +539,7 @@ def regenerate_with_user_notes(clause_id, cfg, org):
         revision_prompt,
         cfg["llm"]["temperature"],
         timeout=cfg.get("timeouts", {}).get("ollama_generate", 600),
+        num_predict=cfg["llm"].get("num_predict", 1200),
     )
 
     if not revised or not revised.strip():
@@ -567,7 +554,7 @@ def regenerate_with_user_notes(clause_id, cfg, org):
         hash_file.unlink()
 
     from core import save_status
-    save_status(clause_id, "DRAFT", "")
+    save_status(clause_id, "PENDING", "")
 
     auto_clauses = cfg.get("critic", {}).get("auto_clauses", [])
     if cfg.get("critic", {}).get("enabled") and clause_id in auto_clauses:
@@ -642,6 +629,99 @@ def write_review_note_event(clause_id, notes, cfg):
 
 
 # ---------------------------------------------------------------------------
+# Scope Analyst
+# ---------------------------------------------------------------------------
+
+SCOPE_ANALYST_PROMPT = """\
+You are an ISO 27001:2022 lead auditor reviewing an ISMS Scope document (Clause 4.3).
+
+ORGANISATION PROFILE:
+Name: {org_name}
+Industry: {org_industry}
+Size: {org_size}
+Locations: {org_locations}
+Departments: {org_departments}
+Assets: {org_assets}
+Regulatory / Contractual Drivers: {org_regulatory}
+Primary Processes: {org_processes}
+
+CURRENT SCOPE DOCUMENT (Clause 4.3):
+{scope_doc}
+
+TASK:
+Analyse the scope document above against the organisation profile. Produce a concise audit-style gap report with exactly four sections:
+
+## 1. Missing or under-specified locations
+List any locations from the profile absent from the scope. If none, write "None identified."
+
+## 2. Missing or under-specified departments
+List departments from the profile absent from the departmental inclusion table. If none, write "None identified."
+
+## 3. Missing regulatory / contractual drivers
+List regulatory or contractual obligations from the profile not addressed in the scope. If none, write "None identified."
+
+## 4. Suggested scope boundary statement
+Write a single concise paragraph (3-5 sentences) that defines the ISMS boundary precisely, using only the information in the profile above. Do not invent information.
+
+CRITICAL: Output ONLY the four sections above. No preamble, no meta-commentary.
+"""
+
+
+def run_scope_analyst(cfg, org):
+    """
+    Analyse the current 4.3 scope document against the org profile.
+    Returns (success: bool, analysis_text: str).
+    """
+    outputs_dir = Path(cfg["paths"]["outputs"])
+    scope_file = outputs_dir / "4.3.md"
+
+    if not scope_file.exists():
+        return False, "Clause 4.3 has not been generated yet. Run Generate first."
+
+    scope_doc = scope_file.read_text(encoding="utf-8", errors="replace")
+
+    def _join(val, fallback="Not specified"):
+        if isinstance(val, list):
+            return ", ".join(str(v) for v in val) if val else fallback
+        return str(val) if val else fallback
+
+    assets_raw = org.get("assets", [])
+    if assets_raw and isinstance(assets_raw[0], dict):
+        assets_str = ", ".join(a.get("name", str(a)) for a in assets_raw[:10])
+    else:
+        assets_str = _join(assets_raw)
+
+    prompt = SCOPE_ANALYST_PROMPT.format(
+        org_name=org.get("name", ""),
+        org_industry=org.get("industry", ""),
+        org_size=org.get("size", ""),
+        org_locations=_join(org.get("locations", [])),
+        org_departments=_join(org.get("departments", [])),
+        org_assets=assets_str,
+        org_regulatory=_join(org.get("regulatory_drivers", [])),
+        org_processes=_join(org.get("primary_processes", [])),
+        scope_doc=scope_doc[:5000],
+    )
+
+    log.info("[SCOPE-ANALYST] running analysis on 4.3")
+    try:
+        result = call_ollama(
+            cfg["llm"]["base_url"],
+            cfg["llm"]["model"],
+            prompt,
+            temperature=0.1,
+            timeout=cfg.get("timeouts", {}).get("ollama_generate", 600),
+            num_predict=cfg["llm"].get("num_predict", 1200),
+        )
+        result = _clean_generated_markdown(result)
+        log.info("[SCOPE-ANALYST] done")
+        return True, result
+    except Exception as e:
+        log.warning("[SCOPE-ANALYST] failed: %s", e)
+        return False, str(e)
+
+
+# ---------------------------------------------------------------------------
 # Single clause generation
 # ---------------------------------------------------------------------------
 
@@ -667,10 +747,14 @@ def generate_clause(clause_id, cfg, org, collection, embed_model, force=False):
     # Check cache
     rag_context = get_rag_context(collection, embed_model, clause_id, cfg["rag"]["top_k"])
     upstream_context = build_upstream_context(clause_id, outputs_dir)
+    item_counts_str = json.dumps(
+        cfg.get("generation", {}).get("item_counts", {}), sort_keys=True
+    )
     current_hash = content_hash(
         json.dumps(org, sort_keys=True),
         rag_context,
         skill_text,
+        item_counts_str,
     )
 
     if not force and out_file.exists() and hash_file.exists():
@@ -693,13 +777,38 @@ def generate_clause(clause_id, cfg, org, collection, embed_model, force=False):
         for a in raw_assets
     ]
 
+    # Inject risk register for risk clauses so templates can use real risks
+    if clause_id in ("6.1.2", "6.1.3"):
+        risk_path = outputs_dir / "risk_register.json"
+        if risk_path.exists():
+            try:
+                org_render["risks"] = json.loads(risk_path.read_text(encoding="utf-8"))
+            except Exception:
+                org_render["risks"] = []
+        else:
+            org_render["risks"] = []
+
     # Render prompt (prepend style preamble so LLM adopts formal ISO tone)
     template = Template(skill_text)
-    prompt = SKILL_STYLE_PREAMBLE + template.render(
+    # Build preamble: append length directive when configured
+    target_words = cfg.get("pipeline", {}).get("target_words", "")
+    length_line = f"Target length: {target_words}.\n\n" if target_words else ""
+    preamble = SKILL_STYLE_PREAMBLE + length_line
+
+    # Optional, fail-soft: structure exemplar + guidance RAG from owned PDFs
+    exemplar_block = get_structure_exemplar(cfg, clause_id)
+    guidance_block = get_guidance_context(cfg, embed_model, clause_id)
+    extras = "\n\n".join(b for b in (exemplar_block, guidance_block) if b)
+    if extras:
+        preamble = preamble + extras + "\n\n"
+
+    item_counts = cfg.get("generation", {}).get("item_counts", {})
+    prompt = preamble + template.render(
         clause_id=clause_id,
         org=org_render,
         rag_context=rag_context,
         upstream_context=upstream_context,
+        **item_counts,
     )
 
     # Call LLM
@@ -710,6 +819,7 @@ def generate_clause(clause_id, cfg, org, collection, embed_model, force=False):
         prompt,
         cfg["llm"]["temperature"],
         timeout=cfg.get("timeouts", {}).get("ollama_generate", 600),
+        num_predict=cfg["llm"].get("num_predict", 1200),
     )
     result = _clean_generated_markdown(result)
     log.info("[DONE] %s — %d words", clause_id, len(result.split()))

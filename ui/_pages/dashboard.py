@@ -9,8 +9,9 @@ from datetime import datetime
 
 from core import (
     CLAUSE_NAMES, STATUS_KIND, REVIEW_RESULT, OUTPUTS_DIR,
+    PDCA_GROUPS, PDCA_PHASE_COLORS,
     completion_stats, get_clause_status, get_review_assessment,
-    load_org, export_all_to_excel, read_log_tail, get_active_clauses,
+    load_org, export_all_to_excel, read_log_tail,
 )
 from components import page_head, pill, finding_html, meta_row_html, stepper_html
 from icons import icon
@@ -25,24 +26,23 @@ def render() -> None:
     org = load_org()
 
     # ── Actions ──────────────────────────────────────────────────────────
-    org_complete  = bool(org.get("name"))
-    active        = get_active_clauses()
-    docs_exist    = any((OUTPUTS_DIR / f"{cid}.md").exists() for cid in active)
-    gen_count     = sum(1 for cid in active if (OUTPUTS_DIR / f"{cid}.md").exists())
-    all_generated = gen_count == total and total > 0
+    org_complete = bool(org.get("name"))
+    gen_count    = sum(1 for cid in CLAUSE_NAMES if (OUTPUTS_DIR / f"{cid}.md").exists())
+    docs_exist   = gen_count > 0
+    all_generated = gen_count == total
+    all_approved  = approved == total and total > 0
 
-    if not org_complete:
-        next_target, next_label = "org", "Set up organization"
-    elif not all_generated:
-        next_target, next_label = "generate", "Generate documents"
-    elif needs_att > 0:
-        next_target, next_label = "review", "Review documents"
+    # Smart routing: route Continue to the step that needs attention (Bugs D1/D2/I1)
+    if not all_generated:
+        _continue_page, _continue_label = "generate", "Continue setup"
+    elif not all_approved:
+        _continue_page, _continue_label = "review", "Review documents"
     else:
-        next_target, next_label = "documents", "Export documents"
+        _continue_page, _continue_label = "annex", "Go to Annex A"
 
     actions = (
-        f'<a href="?page={next_target}" target="_self" class="btn primary">'
-        f'{icon("play", 14)}{next_label}</a>'
+        f'<a href="?page={_continue_page}" target="_self" class="btn primary">'
+        f'{icon("play", 14)}{_continue_label}</a>'
     )
     page_head(
         "Certification progress",
@@ -50,23 +50,40 @@ def render() -> None:
         actions,
     )
 
+    # ── PDCA phase summary ────────────────────────────────────────────────
+    pdca_html = '<div style="display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap;">'
+    for phase, clauses in PDCA_GROUPS.items():
+        color = PDCA_PHASE_COLORS[phase]
+        total_phase = len(clauses)
+        approved_phase = sum(1 for c in clauses if get_clause_status(c) == "APPROVED")
+        pdca_html += (
+            f'<div style="background:{color}15;border:1px solid {color}40;border-radius:6px;'
+            f'padding:8px 14px;min-width:100px;">'
+            f'<span style="color:{color};font-weight:700;font-size:0.8rem;">{phase}</span><br>'
+            f'<span style="font-size:1.1rem;font-weight:600;">{approved_phase}/{total_phase}</span>'
+            f'<span style="font-size:0.7rem;color:#666;"> approved</span>'
+            f'</div>'
+        )
+    pdca_html += '</div>'
+    st.markdown(pdca_html, unsafe_allow_html=True)
+
     # ── Stepper ──────────────────────────────────────────────────────────
     step_data = [
         {"num": 1, "state": "done" if org_complete else "current",
          "name": "Organization", "desc": "Profile complete" if org_complete else "Set up profile"},
         {"num": 2, "state": "done" if all_generated else ("current" if org_complete else "pending"),
          "name": "Generate",
-         "desc": f"{gen_count} / {total} documents" if org_complete else "Create documents"},
-        {"num": 3, "state": "current" if (docs_exist and needs_att > 0) else ("done" if approved == total and docs_exist else "pending"),
+         "desc": f"{gen_count} / {total} documents" if docs_exist else "Create documents"},
+        {"num": 3, "state": "current" if (all_generated and needs_att > 0) else ("done" if all_approved else "pending"),
          "name": "Review",
          "desc": f"{needs_att} awaiting review" if needs_att > 0 else "Approve documents"},
-        {"num": 4, "state": "done" if (approved == total and total > 0) else "pending",
+        {"num": 4, "state": "done" if all_approved else "pending",
          "name": "Certify", "desc": "Submit to auditor"},
     ]
     st.markdown(
-        f'<div class="hint" style="margin-bottom:8px;font-size:12.5px;color:var(--ink-3)">'
-        f'How this works: <strong>1.</strong> Tell the AI about your company &nbsp;·&nbsp; '
-        f'<strong>2.</strong> AI writes {total} ISO 27001 documents &nbsp;·&nbsp; '
+        '<div class="hint" style="margin-bottom:8px;font-size:12.5px;color:var(--ink-3)">'
+        'How this works: <strong>1.</strong> Tell the AI about your company &nbsp;·&nbsp; '
+        '<strong>2.</strong> AI writes 23 ISO 27001 documents &nbsp;·&nbsp; '
         '<strong>3.</strong> Read &amp; approve each one &nbsp;·&nbsp; '
         '<strong>4.</strong> Send the approved set to your auditor.'
         '</div>',
@@ -139,7 +156,7 @@ def render() -> None:
     with col_left:
         # Document table
         rows_html = ""
-        for cid, name in get_active_clauses().items():
+        for cid, name in CLAUSE_NAMES.items():
             status  = get_clause_status(cid)
             review  = get_review_assessment(cid)
             rlabel  = REVIEW_RESULT.get(review, ("—",))[0] if review else "—"
@@ -198,11 +215,11 @@ def render() -> None:
 
 def _build_reviewer_activity() -> None:
     """Show last 3 reviewer findings as finding cards."""
-    from core import CLAUSE_NAMES, get_review_assessment, get_review_text, REVIEW_RESULT, get_active_clauses
+    from core import CLAUSE_NAMES, get_review_assessment, get_review_text, REVIEW_RESULT
 
     findings_html = ""
     count = 0
-    for cid in get_active_clauses():
+    for cid in CLAUSE_NAMES:
         if count >= 3:
             break
         rev_code = get_review_assessment(cid)

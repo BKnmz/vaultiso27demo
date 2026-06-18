@@ -27,7 +27,7 @@ logging.basicConfig(
 )
 log = logging.getLogger("launcher")
 VENV_PYTHON = BASE_DIR / ".venv" / "Scripts" / "python.exe"
-PORT = 8502
+PORT = 8501
 
 
 def check_python():
@@ -69,17 +69,14 @@ def check_hardware_config():
 def check_rag_index():
     chroma_path = BASE_DIR / "rag" / "chroma_db"
     if not chroma_path.exists():
-        log.info("ChromaDB index not found — attempting to build now...")
+        log.info("ChromaDB index not found — building now (internet required for first run)...")
         result = subprocess.run(
             [sys.executable, str(BASE_DIR / "rag_setup.py")],
             cwd=str(BASE_DIR),
         )
         if result.returncode != 0:
-            log.warning(
-                "RAG index build failed — tool will run without RAG context. "
-                "To enable full RAG: place a compatible audit checklist at rag/ISO27001_Audit_Checklist_demo.xlsx"
-            )
-            return  # soft-fail: tool still usable with skill-templates only
+            log.error("RAG setup failed. Check rag/ISO27001_Audit_Checklist_V3.xlsx exists.")
+            sys.exit(1)
 
     log.info("RAG index  OK")
 
@@ -95,7 +92,8 @@ def check_ollama():
         models = [m["name"] for m in r.json().get("models", [])]
         log.info("Ollama running  OK  (models: %s)", ', '.join(models) if models else 'none pulled yet')
         if not models:
-            log.warning("No models pulled yet. Check Settings > Model Guide for your tier's pull command.")
+            gen_model_hint = cfg.get("llm", {}).get("model", "phi4-mini:3.8b-q4_K_M")
+            log.warning("No models pulled yet. Run: ollama pull %s", gen_model_hint)
         else:
             gen_model = cfg.get("llm", {}).get("model", "")
             critic_model = cfg.get("critic", {}).get("model", "")

@@ -6,7 +6,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import streamlit as st
 
-from core import CLAUSE_NAMES, BASE_DIR, load_config, get_embedding_model, get_active_clauses
+from core import CLAUSE_NAMES, BASE_DIR, load_config, get_embedding_model
 from components import page_head
 from icons import icon
 
@@ -37,11 +37,20 @@ def render() -> None:
         st.warning("ISO knowledge base not built yet. Run `python rag_setup.py` from the installation folder.")
         return
 
-    _active = get_active_clauses()
+    # Filter clause list to active pipeline clauses only (Bug I5)
+    def get_active_clauses() -> list:
+        """Return clause IDs that are in both CLAUSE_NAMES and config pipeline.clauses, in order."""
+        active = cfg.get("pipeline", {}).get("clauses", list(CLAUSE_NAMES.keys()))
+        return [c for c in active if c in CLAUSE_NAMES]
+
+    _active_clauses = get_active_clauses()
+    if not _active_clauses:
+        _active_clauses = list(CLAUSE_NAMES.keys())
+
     cid = st.selectbox(
         "Select a document to inspect",
-        list(_active.keys()),
-        format_func=lambda x: f"{x} — {_active[x]}",
+        _active_clauses,
+        format_func=lambda x: f"{x} — {CLAUSE_NAMES[x]}",
     )
 
     if st.button("Show ISO reference entries", type="primary"):

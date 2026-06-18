@@ -102,67 +102,6 @@ def test_inline_code():
     assert code_runs[0].text == "python main.py"
 
 
-# ── critic findings table parser ─────────────────────────────────────────────
-import re as _re
-import sys as _sys
-from pathlib import Path as _Path
-_sys.path.insert(0, str(_Path(__file__).parent.parent / "ui"))
-from _pages.review import _parse_findings_table, _normalize_status
-
-
-def _make_critic_output(rows_text: str) -> str:
-    return (
-        "## Critic Review — Clause 4.1\n\n"
-        "**Overall Assessment:** FAIL\n\n"
-        "### Findings Table\n"
-        "| # | Check | Result | Detail |\n"
-        "|---|-------|--------|--------|\n"
-        + rows_text +
-        "\n### Required Revisions\n"
-    )
-
-
-def test_normalize_status_brackets():
-    assert _normalize_status("[FAIL]") == "FAIL"
-    assert _normalize_status("[PASS]") == "PASS"
-    assert _normalize_status("[FAIL/WARN]") == "FAIL"
-    assert _normalize_status("[PASS/FAIL/WARN]") == "PASS"
-    assert _normalize_status("WARN") == "WARN"
-
-
-def test_parse_4col_format():
-    rows_text = (
-        "| 1 | ISO Mapping | [FAIL] | Missing requirements. |\n"
-        "| 2 | Completeness | [PASS] | All sections present. |\n"
-        "| 3 | Org Specificity | [FAIL/WARN] | Generic statements found. |\n"
-    )
-    rows = _parse_findings_table(_make_critic_output(rows_text))
-    assert len(rows) == 3
-    assert rows[0]["dimension"] == "ISO Mapping"
-    assert rows[0]["status"] == "FAIL"
-    assert rows[1]["status"] == "PASS"
-    assert rows[2]["status"] == "FAIL"
-
-
-def test_parse_clean_4col_format():
-    rows_text = (
-        "| 1 | ISO Mapping | PASS | All addressed. |\n"
-        "| 2 | Completeness | FAIL | Section missing. |\n"
-    )
-    rows = _parse_findings_table(_make_critic_output(rows_text))
-    assert rows[0]["status"] == "PASS"
-    assert rows[1]["status"] == "FAIL"
-
-
-def test_parse_skips_header_row():
-    rows_text = (
-        "| 1 | ISO Mapping | FAIL | Detail here. |\n"
-    )
-    full = _make_critic_output(rows_text)
-    rows = _parse_findings_table(full)
-    assert all(r["dimension"] not in ("#", "Check", "") for r in rows)
-
-
 def test_extract_tables_basic():
     content = (
         "## Risk Assessment\n\n"

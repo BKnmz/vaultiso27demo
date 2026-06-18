@@ -2,7 +2,7 @@
 VaultISO27 — backend core: constants, data helpers, export functions.
 Imported by app.py (routing shell) and all page modules.
 """
-__version__ = "0.4.2"
+__version__ = "0.5.0"
 import io
 import json
 import platform
@@ -10,7 +10,6 @@ import re
 import subprocess
 import sys
 import time
-from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
@@ -57,6 +56,25 @@ CLAUSE_NAMES = {
     "10.2":  "Continual Improvement",
 }
 
+PDCA_GROUPS = {
+    "Plan":  ["4.1","4.2","4.3","5.1","5.2","5.3","6.1"],
+    "Do":    ["6.1.2","6.1.3","6.2","7.1","7.2","7.3","7.4","7.5","8.1"],
+    "Check": ["8.2","8.3","9.1","9.2","9.3"],
+    "Act":   ["10.1","10.2"],
+}
+PDCA_PHASE_COLORS = {
+    "Plan":  "#2563eb",
+    "Do":    "#16a34a",
+    "Check": "#d97706",
+    "Act":   "#dc2626",
+}
+
+def get_pdca_phase(clause_id: str) -> str:
+    for phase, clauses in PDCA_GROUPS.items():
+        if clause_id in clauses:
+            return phase
+    return "Plan"
+
 # New: kind strings for pill rendering (replaces emoji STATUS_ICON)
 STATUS_KIND = {"APPROVED": "ok", "DRAFT": "warn", "REVISION": "err", "MISSING": "neutral"}
 
@@ -70,19 +88,6 @@ REVIEW_RESULT = {
 
 # Clauses whose primary output is tabular — offered as .xlsx in addition to .docx
 EXCEL_EXPORT_CLAUSES = {"6.1.2", "6.1.3", "9.1", "9.2"}
-
-# Annex A controls present in the demo RAG Excel (ISO27001_Audit_Checklist_demo.xlsx).
-# Only these IDs appear in the demo Annex sheets — used to filter the Annex A tab.
-DEMO_ANNEX_CONTROLS = {
-    # A.5_Operational (8 controls)
-    "5.1", "5.2", "5.3", "5.4", "5.5", "5.6", "5.7", "5.9",
-    # A.6_People (3 controls)
-    "6.6", "6.7", "6.8",
-    # A.7_Physical (5 controls)
-    "7.1", "7.2", "7.3", "7.4", "7.5",
-    # A._Technical (5 controls)
-    "8.1", "8.2", "8.3", "8.4", "8.5",
-}
 
 MANDATORY_ORG_FIELDS = [
     ("name",              "Company name"),
@@ -208,106 +213,102 @@ ANNEX_A_CONTROLS: dict[str, dict] = {
 ANNEX_A_EVIDENCE_FILE = OUTPUTS_DIR / "annex_a_evidence.json"
 ANNEX_A_STATUSES      = ["Not Assessed", "Implemented", "Partial", "Planned"]
 
-# Speed-first lineup: a generator is only recommended for a tier if it FITS
-# that tier's VRAM (GPU speed) or is small enough to run tolerably on CPU+RAM.
-# A bigger model that spills out of VRAM runs 5-10x slower — never recommended.
 MODEL_GUIDE = [
-    # Reviewer — all tiers (tiny, fast, always recommended alongside any gen model)
-    {"Model": "qwen2.5:1.5b", "Best for": "AI Reviewer — all tiers",
-     "VRAM": "~0.9 GB (fits any GPU)", "Speed": "~30 tok/s",
-     "Doc time": "~2 min per review",
-     "Install": "ollama pull qwen2.5:1.5b",
-     "tiers": ["minimal", "low", "cpu_rich", "mid", "high"]},
-    # Generators — ordered smallest to largest
-    {"Model": "qwen2.5:1.5b", "Best for": "Document generation — minimal (<8 GB RAM). Last resort; quality limited.",
-     "VRAM": "~0.9 GB", "Speed": "~25 tok/s",
-     "Doc time": "~5–10 min per document",
-     "Install": "ollama pull qwen2.5:1.5b",
-     "tiers": ["minimal"]},
-    {"Model": "phi4-mini:3.8b-q4_K_M",
-     "Best for": "Document generation — standard / CPU-rich (<6 GB VRAM). "
-                 "Fast default: small enough to run on CPU+RAM without the 5-10x slowdown of a spilled large model.",
-     "VRAM": "~2.5 GB", "Speed": "~3–5 tok/s CPU / ~15 tok/s GPU",
-     "Doc time": "~8–15 min per document on CPU",
-     "Install": "ollama pull phi4-mini:3.8b-q4_K_M",
-     "tiers": ["low", "cpu_rich"]},
-    {"Model": "gemma4:e4b-it-qat",
-     "Best for": "Document generation — mid-range (6–12 GB VRAM, fits in VRAM). "
-                 "Optional on CPU-rich machines: better quality but ~3x slower than phi4-mini.",
-     "VRAM": "~6.1 GB", "Speed": "~10 tok/s GPU / ~2 tok/s CPU",
-     "Doc time": "~2–4 min per document on GPU",
-     "Install": "ollama pull gemma4:e4b-it-qat",
-     "tiers": ["mid"]},
-    {"Model": "gemma4:12b-it-qat",
-     "Best for": "Document generation — high-end (12 GB+ VRAM, fits in VRAM). Best quality at GPU speed.",
-     "VRAM": "~7.2 GB", "Speed": "~12 tok/s",
-     "Doc time": "~1–2 min per document",
-     "Install": "ollama pull gemma4:12b-it-qat",
-     "tiers": ["high"]},
+    {"Model": "gemma4:12b-it-qat", "Best for": "Document generation — high tier (12 GB+ VRAM)",
+     "VRAM": "~7.2 GB (fully on GPU)", "Speed": "~1-2 min per document", "min_ram_gb": 0,
+     "Install": "ollama pull gemma4:12b-it-qat"},
+    {"Model": "gemma4:e4b-it-qat", "Best for": "Document generation — mid tier (6-12 GB VRAM)",
+     "VRAM": "~6.1 GB (fully on GPU)", "Speed": "~2-4 min per document", "min_ram_gb": 0,
+     "Install": "ollama pull gemma4:e4b-it-qat"},
+    {"Model": "phi4-mini:3.8b-q4_K_M", "Best for": "Document generation — cpu_rich / low tier",
+     "VRAM": "~2.5 GB (CPU-primary)", "Speed": "~8-20 min per document", "min_ram_gb": 8,
+     "Install": "ollama pull phi4-mini:3.8b-q4_K_M"},
+    {"Model": "qwen2.5:1.5b", "Best for": "AI Reviewer (all tiers) / generator for minimal tier",
+     "VRAM": "~0.9 GB", "Speed": "~5-10 min per document", "min_ram_gb": 0,
+     "Install": "ollama pull qwen2.5:1.5b"},
 ]
 
 
-def _detect_vram_gb_ui() -> float:
-    """VRAM detection with NVIDIA + AMD/Intel fallback. Used by Streamlit UI."""
-    # 1. NVIDIA
+def _vram_from_nvidia_smi_ui():
+    """Stage 1: nvidia-smi (NVIDIA cards only). Returns GB float or 0."""
     try:
         out = subprocess.check_output(
             ["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
-            timeout=3, stderr=subprocess.DEVNULL,
+            timeout=5, stderr=subprocess.DEVNULL,
         )
         return round(int(out.decode().strip().split()[0]) / 1024, 1)
     except Exception:
-        pass
-    # 2. Windows registry (64-bit, covers AMD/Intel)
-    if platform.system() == "Windows":
-        try:
-            ps = (
-                "Get-ItemProperty -Path "
-                "'HKLM:\\SYSTEM\\ControlSet001\\Control\\Class\\"
-                "{4d36e968-e325-11ce-bfc1-08002be10318}\\0*' "
-                "-Name 'HardwareInformation.qwMemorySize' "
-                "-ErrorAction SilentlyContinue | "
-                "Measure-Object -Property 'HardwareInformation.qwMemorySize' "
-                "-Maximum | Select-Object -ExpandProperty Maximum"
-            )
-            out = subprocess.check_output(
-                ["powershell", "-NoProfile", "-Command", ps],
-                timeout=6, stderr=subprocess.DEVNULL,
-            )
-            raw = out.decode().strip()
-            if raw and raw != "0":
-                return round(int(raw) / 1_073_741_824, 1)
-        except Exception:
-            pass
-        # 3. WMI AdapterRAM (32-bit cap ~4 GB — last resort)
-        try:
-            ps2 = (
-                "Get-WmiObject Win32_VideoController | "
-                "Where-Object {$_.AdapterRAM -gt 0} | "
-                "Measure-Object AdapterRAM -Maximum | "
-                "Select-Object -ExpandProperty Maximum"
-            )
-            out = subprocess.check_output(
-                ["powershell", "-NoProfile", "-Command", ps2],
-                timeout=6, stderr=subprocess.DEVNULL,
-            )
-            raw = out.decode().strip()
-            if raw and raw != "0":
-                return round(int(raw) / 1_073_741_824, 1)
-        except Exception:
-            pass
-    return 0.0
+        return 0
+
+
+def _vram_from_registry_ui():
+    """Stage 2: Windows registry HardwareInformation.qwMemorySize (64-bit, any vendor).
+    Returns GB float or 0."""
+    if platform.system() != "Windows":
+        return 0
+    try:
+        import winreg
+        base = r"SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
+        best = 0
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, base) as root:
+            i = 0
+            while True:
+                try:
+                    sub = winreg.EnumKey(root, i)
+                except OSError:
+                    break
+                i += 1
+                if not sub.isdigit():
+                    continue
+                try:
+                    with winreg.OpenKey(root, sub) as k:
+                        val, _ = winreg.QueryValueEx(k, "HardwareInformation.qwMemorySize")
+                        if isinstance(val, (bytes, bytearray)):
+                            val = int.from_bytes(val, "little")
+                        best = max(best, int(val))
+                except OSError:
+                    continue
+        return round(best / 1_073_741_824, 1) if best else 0
+    except Exception:
+        return 0
+
+
+def _vram_from_wmi_ui():
+    """Stage 3: WMI AdapterRAM (32-bit, caps near 4 GB — last resort).
+    Returns GB float or 0."""
+    if platform.system() != "Windows":
+        return 0
+    try:
+        out = subprocess.check_output(
+            ["powershell", "-NoProfile", "-Command",
+             "(Get-CimInstance Win32_VideoController | "
+             "Measure-Object -Property AdapterRAM -Maximum).Maximum"],
+            timeout=10, stderr=subprocess.DEVNULL,
+        )
+        raw = out.decode().strip()
+        return round(int(raw) / 1_073_741_824, 1) if raw.isdigit() else 0
+    except Exception:
+        return 0
+
+
+def _detect_vram_gb_ui() -> float:
+    """Best-available VRAM in GB via three-stage fallback (nvidia-smi -> registry -> WMI)."""
+    for stage in (_vram_from_nvidia_smi_ui, _vram_from_registry_ui, _vram_from_wmi_ui):
+        vram = stage()
+        if vram:
+            return vram
+    return 0
 
 
 @st.cache_data(ttl=300)
 def detect_hardware() -> dict:
-    """Detect RAM, VRAM (NVIDIA + AMD/Intel), and CPU."""
+    """Detect RAM, VRAM, and CPU. Returns dict with ram_gb, vram_gb, cpu."""
     try:
         import psutil
         ram_gb = round(psutil.virtual_memory().total / 1_073_741_824, 1)
     except Exception:
-        ram_gb = 0.0
-    cpu     = platform.processor() or platform.machine() or "Unknown CPU"
+        ram_gb = 0
+    cpu = platform.processor() or platform.machine() or "Unknown CPU"
     vram_gb = _detect_vram_gb_ui()
     return {"ram_gb": ram_gb, "vram_gb": vram_gb, "cpu": cpu}
 
@@ -326,23 +327,6 @@ def load_config():
 def save_config(cfg):
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
         yaml.dump(cfg, f, default_flow_style=False, allow_unicode=True)
-
-
-def get_active_clauses() -> dict:
-    """Clauses enabled for this build per config.yaml pipeline.clauses.
-
-    Used by every UI page so the demo build only surfaces the clauses
-    it actually ships with (10 mandatory clauses) instead of the full 23.
-    Order follows config; unknown IDs are skipped.
-    """
-    try:
-        cfg = load_config()
-        pipe = cfg.get("pipeline", {}).get("clauses", []) or []
-    except Exception:
-        pipe = []
-    if not pipe:
-        return dict(CLAUSE_NAMES)
-    return {cid: CLAUSE_NAMES[cid] for cid in pipe if cid in CLAUSE_NAMES}
 
 def load_org():
     if not ORG_PATH.exists():
@@ -401,11 +385,10 @@ def read_output(cid):
     return f.read_text(encoding="utf-8", errors="replace") if f.exists() else None
 
 def completion_stats():
-    counts = defaultdict(int, {"APPROVED": 0, "DRAFT": 0, "REVISION": 0, "MISSING": 0})
-    active = get_active_clauses()
-    for cid in active:
+    counts = {"APPROVED": 0, "DRAFT": 0, "REVISION": 0, "MISSING": 0}
+    for cid in CLAUSE_NAMES:
         counts[get_clause_status(cid)] += 1
-    return len(active), counts
+    return len(CLAUSE_NAMES), counts
 
 def read_log_tail(n=60):
     if not LOG_FILE.exists():
@@ -670,7 +653,8 @@ def export_clause_to_excel(cid, content, org_name=""):
     else:
         wb.remove(wb.active)
         for tbl_data in tables:
-            ws = wb.create_sheet(title=tbl_data["title"][:31])
+            sheet_name = re.sub(r'[\\/*?:\[\]]', '-', tbl_data["title"])[:31]
+            ws = wb.create_sheet(title=sheet_name)
             n_cols = len(tbl_data["headers"])
             if n_cols == 0:
                 continue
@@ -952,82 +936,27 @@ def _parse_supplier_register(file_bytes: bytes) -> list:
 
 def extract_text_from_upload(uploaded_file):
     suffix = Path(uploaded_file.name).suffix.lower()
-    raw = uploaded_file.read()
-
-    if suffix in (".txt", ".md"):
-        try:
-            return raw.decode("utf-8", errors="replace")
-        except Exception as e:
-            try:
-                return raw.decode("cp1252", errors="replace")
-            except Exception:
-                st.error(f"Could not decode text file: {e}")
-                return None
-
+    if suffix == ".txt":
+        return uploaded_file.read().decode("utf-8", errors="replace")
     elif suffix == ".pdf":
         try:
             import pypdf
-            from io import BytesIO as _BytesIO
-            reader = pypdf.PdfReader(_BytesIO(raw))
+            reader = pypdf.PdfReader(uploaded_file)
             return "\n".join(p.extract_text() or "" for p in reader.pages)
         except Exception as e:
             st.error(f"Could not read PDF: {e}")
             return None
-
-    elif suffix == ".docx":
+    elif suffix in (".docx", ".doc"):
         try:
             from docx import Document as DocxDoc
-            from io import BytesIO as _BytesIO
-            doc = DocxDoc(_BytesIO(raw))
+            doc = DocxDoc(uploaded_file)
             return "\n".join(p.text for p in doc.paragraphs if p.text.strip())
         except Exception as e:
-            st.error(f"Could not read Word document: {e}. Make sure the file is .docx (not .doc).")
+            st.error(f"Could not read Word document: {e}")
             return None
-
-    elif suffix == ".doc":
-        st.error(
-            "Legacy .doc files are not supported. Please save the file as .docx "
-            "(File → Save As → Word Document .docx) and re-upload."
-        )
-        return None
-
-    elif suffix in (".html", ".htm"):
-        try:
-            import lxml.html
-            tree = lxml.html.fromstring(raw)
-            # Strip style/script — their text content is CSS/JS noise, not readable text
-            for el in tree.xpath("//style | //script"):
-                parent = el.getparent()
-                if parent is not None:
-                    parent.remove(el)
-            text = tree.text_content()
-            return "\n".join(ln.strip() for ln in text.splitlines() if ln.strip())
-        except Exception as e:
-            st.error(f"Could not read HTML file: {e}")
-            return None
-
-    st.error(
-        f"File type '{suffix}' is not supported. "
-        "Please upload a PDF, Word (.docx), plain text (.txt), or HTML (.html) file."
-    )
+    st.error(f"File type not supported: {suffix}. Please upload a PDF, Word (.docx), or text (.txt) file.")
     return None
 
-
-# Slim schema used only for LLM extraction — avoids blowing the 4096-token context window.
-# assets/stakeholders/key_personnel have dedicated upload flows; not extracted here.
-_ORG_EXTRACT_SCHEMA = {
-    "name": "",
-    "industry": "",
-    "size": "",
-    "scope": "",
-    "primary_processes": [],
-    "locations": [],
-    "departments": [],
-    "regulatory_drivers": [],
-    "legal_basis": [],
-    "existing_controls": [],
-    "certifications_existing": [],
-}
 
 ORG_JSON_SCHEMA = {
     "name": "", "industry": "", "size": "", "scope": "",
@@ -1041,25 +970,25 @@ ORG_JSON_SCHEMA = {
 
 
 def extract_org_with_llm(text, cfg):
-    schema_str = json.dumps(_ORG_EXTRACT_SCHEMA, indent=2)
+    schema_str = json.dumps(ORG_JSON_SCHEMA, indent=2)
     prompt = f"""You are an ISO 27001 consultant. Extract organization information from the document below.
 
-Return ONLY a valid JSON object — no explanation, no markdown fences:
+Return ONLY a valid JSON object with this exact structure — no explanation, no markdown fences:
 
 {schema_str}
 
 Rules:
-- "scope": 1-2 sentences describing the core business and IT activities suitable for an ISMS scope statement
+- "scope": 1–2 sentences describing the core business and IT activities suitable for an ISMS scope statement
 - "size": format as "45 employees" or "~100 employees" if approximate
-- "departments": list department or team names found in the document
-- "regulatory_drivers": regulations or standards mentioned (e.g. GDPR, NIS2, TISAX)
-- "legal_basis": only regulations explicitly mentioned — do NOT invent
-- "existing_controls": security controls mentioned (MFA, VPN, firewalls, encryption, etc.)
-- Leave fields as empty string or empty array when not found
+- "departments": list department or team names found in the document (e.g. ["R&D", "Sales", "HR"])
+- "regulatory_drivers": regulations or standards driving ISMS (e.g. ["GDPR", "NIS2", "TISAX"])
+- "legal_basis": include only regulations explicitly mentioned in the document — do NOT invent
+- "existing_controls": list specific security controls mentioned (MFA, VPN, firewalls, encryption, etc.)
+- Leave fields as empty string or empty array when not found in the document
 - Do NOT invent information
 
 DOCUMENT:
-{text[:3000]}
+{text[:5000]}
 
 JSON:"""
 
@@ -1074,46 +1003,27 @@ JSON:"""
         resp = requests.post(
             f"{cfg['llm']['base_url']}/api/generate",
             json={"model": cfg["llm"]["model"], "prompt": prompt, "stream": False,
-                  "options": {"temperature": 0.05, "num_predict": 800, "num_ctx": 2048}},
+                  "options": {"temperature": 0.05, "num_predict": 1500}},
             timeout=300,
         )
-        if resp.status_code != 200:
-            err = resp.json().get("error", resp.text[:200])
-            st.error(f"AI engine error ({resp.status_code}): {err}")
-            return None
-        payload = resp.json()
-        if "error" in payload:
-            st.error(f"AI engine error: {payload['error']}")
-            return None
-        raw = payload.get("response", "").strip()
-        start = raw.find("{")
-        end = raw.rfind("}") + 1
+        raw = resp.json().get("response", "").strip()
+        start, end = raw.find("{"), raw.rfind("}") + 1
         if start >= 0 and end > start:
-            try:
-                return json.loads(raw[start:end])
-            except json.JSONDecodeError:
-                # Truncated JSON — close any unclosed braces/brackets and retry
-                fragment = raw[start:]
-                open_sq = fragment.count("[") - fragment.count("]")
-                open_b = fragment.count("{") - fragment.count("}")
-                fragment += "]" * max(0, open_sq) + "}" * max(0, open_b)
-                try:
-                    return json.loads(fragment)
-                except json.JSONDecodeError:
-                    pass
-        # raw is empty or has no JSON — show what came back for diagnosis
-        preview = raw[:300] if raw else "(empty response)"
-        st.error(
-            "AI did not return valid JSON. Check that your model is pulled and responding correctly.  \n"
-            f"**Raw response:** `{preview}`"
-        )
+            return json.loads(raw[start:end])
+        st.error("The AI returned an unexpected response. "
+                 "Try uploading a shorter or plain-text (.txt) version of your document.")
     except requests.exceptions.Timeout:
         st.error(
-            "AI engine timed out (5 minute limit). Model may still be loading. "
-            "Wait 1–2 minutes and try again."
+            "The AI engine is taking too long (3 minute limit reached). "
+            "This usually means the model is still loading into memory. "
+            "Wait 1–2 minutes, then try again — it will be faster on the second attempt."
         )
     except requests.exceptions.ConnectionError:
-        st.error("Cannot reach AI engine. Check Ollama is running (`ollama serve`).")
+        st.error("Cannot reach the AI engine. "
+                 "Go to Organization > AI Engine and check that Ollama is running.")
+    except json.JSONDecodeError:
+        st.error("Unexpected AI response format. "
+                 "Try uploading a shorter or simpler document (plain text works best).")
     except Exception as e:
         st.error(f"Extraction error: {e}")
     return None
@@ -1121,7 +1031,7 @@ JSON:"""
 
 def extract_personnel_with_llm(text, cfg):
     """Extract key personnel names and roles from an org chart or document."""
-    prompt = f"""Extract named individuals relevant to an ISO 27001 Information Security Management System (ISMS) from the document below.
+    prompt = f"""You are an ISO 27001 consultant. Extract key personnel information from the document below.
 
 Return ONLY a valid JSON array — no explanation, no markdown fences:
 [
@@ -1129,17 +1039,11 @@ Return ONLY a valid JSON array — no explanation, no markdown fences:
   {{"role": "CISO", "name": "Full Name"}}
 ]
 
-Include these person types (in priority order):
-1. Information security roles: CISO, Information Security Manager, DPO, Risk Manager, Compliance Officer, Internal Auditor, IS Officer
-2. Top management: CEO, CTO, COO, CFO, Managing Director, General Manager, VP, Director
-3. Department or team heads who are named and in scope of ISMS operations
-
 Rules:
-- Use the exact role title from the document
-- Skip unnamed positions (e.g. "CISO (unnamed)") — do NOT invent a name
-- Skip individual contributors without management or IS responsibility
-- Return an empty array [] if no qualifying named individuals are found
-- Do NOT invent or guess names
+- Include only named individuals with clear roles
+- Roles should map to information security governance (CEO, CISO, IT Manager, Risk Owner, DPO, etc.)
+- Return an empty array [] if no clear personnel found
+- Do NOT invent names
 
 DOCUMENT:
 {text[:3000]}
@@ -1149,17 +1053,13 @@ JSON:"""
         resp = requests.post(
             f"{cfg['llm']['base_url']}/api/generate",
             json={"model": cfg["llm"]["model"], "prompt": prompt, "stream": False,
-                  "options": {"temperature": 0.05, "num_predict": 800, "num_ctx": 2048}},
+                  "options": {"temperature": 0.05, "num_predict": 300}},
             timeout=120,
         )
         raw = resp.json().get("response", "").strip()
-        start = raw.find("[")
-        end = raw.rfind("]") + 1
+        start, end = raw.find("["), raw.rfind("]") + 1
         if start >= 0 and end > start:
-            try:
-                return json.loads(raw[start:end])
-            except json.JSONDecodeError:
-                return []
+            return json.loads(raw[start:end])
     except Exception as e:
         st.error(f"Personnel extraction error: {e}")
     return None
@@ -1232,6 +1132,61 @@ def save_annex_a(data: dict) -> None:
     ANNEX_A_EVIDENCE_FILE.write_text(
         json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
     )
+
+
+# ---------------------------------------------------------------------------
+# Risk Register helpers
+# ---------------------------------------------------------------------------
+
+RISK_REGISTER_PATH = OUTPUTS_DIR / "risk_register.json"
+
+def load_risk_register() -> list:
+    if RISK_REGISTER_PATH.exists():
+        try:
+            return json.loads(RISK_REGISTER_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            return []
+    return []
+
+def save_risk_register(data: list) -> None:
+    RISK_REGISTER_PATH.parent.mkdir(parents=True, exist_ok=True)
+    RISK_REGISTER_PATH.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+
+def export_risk_register_to_excel(data: list) -> bytes:
+    from io import BytesIO
+    import openpyxl
+    from openpyxl.styles import PatternFill, Font, Alignment
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Risk Register"
+    NAVY = "1B2A4A"
+    STATUS_COLORS = {"Open": "FFF3CD", "In Treatment": "D1ECF1", "Closed": "D4EDDA"}
+    headers = ["ID","Asset","Threat","Vulnerability","Likelihood","Impact","Score","Treatment","Controls","Owner","Residual","Status","Notes"]
+    for col, h in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col, value=h)
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = PatternFill("solid", fgColor=NAVY)
+        cell.alignment = Alignment(horizontal="center")
+    for row_idx, risk in enumerate(data, 2):
+        row_data = [
+            risk.get("id",""), risk.get("asset_ref",""), risk.get("threat",""),
+            risk.get("vulnerability",""), risk.get("likelihood",0), risk.get("impact",0),
+            risk.get("inherent_score",0), risk.get("treatment",""),
+            ", ".join(risk.get("control_refs",[])), risk.get("owner",""),
+            risk.get("residual_score",0), risk.get("status","Open"), risk.get("notes",""),
+        ]
+        status = risk.get("status","Open")
+        fill_color = STATUS_COLORS.get(status, "FFFFFF")
+        for col_idx, val in enumerate(row_data, 1):
+            cell = ws.cell(row=row_idx, column=col_idx, value=val)
+            cell.fill = PatternFill("solid", fgColor=fill_color)
+    col_widths = [8,20,25,25,11,8,8,12,20,15,10,14,20]
+    for i, w in enumerate(col_widths, 1):
+        ws.column_dimensions[ws.cell(row=1,column=i).column_letter].width = w
+    buf = BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
 
 @st.cache_data(show_spinner=False)
 def export_soa_to_excel(evidence_json: str, org_name: str = "") -> bytes:

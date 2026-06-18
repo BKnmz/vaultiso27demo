@@ -11,10 +11,11 @@ import streamlit as st
 from datetime import datetime
 
 from core import (
-    CLAUSE_NAMES, STATUS_KIND, REVIEW_RESULT, OUTPUTS_DIR, get_active_clauses,
+    CLAUSE_NAMES, STATUS_KIND, REVIEW_RESULT, OUTPUTS_DIR, BASE_DIR,
+    EXCEL_EXPORT_CLAUSES,
     get_clause_status, save_status, get_review_assessment, get_review_text,
     read_output, load_org, load_config, run_reviewer_subprocess,
-    export_clause_to_word, _get_personnel_for_doc,
+    export_clause_to_word, export_clause_to_excel, _get_personnel_for_doc,
 )
 import pipeline as _pipeline
 from components import page_head, pill
@@ -29,24 +30,10 @@ _STATUS_PILL_KIND = {
 }
 
 
-def _normalize_status(raw: str) -> str:
-    """Strip brackets, take first option, uppercase. e.g. '[FAIL/WARN]' → 'FAIL'."""
-    s = re.sub(r"[\[\]]", "", raw).strip()   # remove [ ]
-    s = s.split("/")[0].strip()              # take first if FAIL/WARN
-    return s.upper()
-
-
 def _parse_findings_table(rev_text: str) -> list[dict]:
-    """Parse the ### Findings Table block into [{dimension, status, finding}].
-
-    Handles both critic output formats:
-      3-col: | Dimension | Status | Finding |
-      4-col: | # | Check | Result | Detail |   (qwen2.5 default)
-    """
+    """Parse the ### Findings Table block into [{dim, status, finding}, ...]."""
     rows: list[dict] = []
     in_table = False
-    header_cols: list[str] = []
-
     for ln in rev_text.splitlines():
         if "### Findings Table" in ln:
             in_table = True
@@ -58,33 +45,15 @@ def _parse_findings_table(rev_text: str) -> list[dict]:
         s = ln.strip()
         if not s.startswith("|"):
             continue
-        if re.match(r"^\|\s*[-:|\s]+\|", s):  # separator row
+        # Skip header & separator rows
+        if re.match(r"^\|\s*[-:|\s]+\|", s):
             continue
         cells = [c.strip() for c in s.strip("|").split("|")]
-
-        # Detect header row to know column layout
-        if not rows and not header_cols and any(
-            c.lower() in ("check", "dimension", "result", "status", "detail", "finding", "#")
-            for c in cells
-        ):
-            header_cols = [c.lower() for c in cells]
-            continue
-
         if len(cells) < 3:
             continue
-
-        # 4-column: | # | Check | Result | Detail |
-        if len(cells) >= 4 and header_cols and header_cols[0] in ("#", "no", ""):
-            dim, raw_status, finding = cells[1], cells[2], " ".join(cells[3:])
-        else:
-            # 3-column legacy: | Dimension | Status | Finding |
-            dim, raw_status, finding = cells[0], cells[1], " | ".join(cells[2:])
-
-        # Skip header-value rows that slipped through
-        if dim.lower() in ("dimension", "check", "#", ""):
+        dim, status, finding = cells[0], cells[1], " | ".join(cells[2:])
+        if dim.lower() in ("dimension", ""):
             continue
-
-        status = _normalize_status(raw_status)
         rows.append({"dimension": dim, "status": status, "finding": finding})
     return rows
 
@@ -192,8 +161,8 @@ def render() -> None:
     reviewer_enabled = cfg.get("critic", {}).get("enabled", False)
 
     pending = [
-        cid for cid in get_active_clauses()
-        if get_clause_status(cid) in ("DRAFT", "REVISION", "PENDING", "GENERATING")
+        cid for cid in CLAUSE_NAMES
+        if get_clause_status(cid) in ("DRAFT", "REVISION")
         and (OUTPUTS_DIR / f"{cid}.md").exists()
     ]
 
@@ -343,45 +312,55 @@ def render() -> None:
                 _status_data = json.loads(_sf.read_text(encoding="utf-8"))
             except Exception:
                 pass
-        _cf = OUTPUTS_DIR / f"{selected}.critic.md"
-        _has_ai_findings = _cf.exists()
-        _has_user_notes = bool(_status_data.get("notes", "").strip())
-        _review_failed = rev_code in ("FAIL", "CONDITIONAL PASS")
-        # Show regen button when: flagged for revision with notes, OR AI review found issues
-        if _status_data.get("status") == "REVISION" and (_has_user_notes or (_has_ai_findings and _review_failed)):
-            _btn_label = "🔁 Re-generate using review findings"
-            _btn_help = (
-                "AI rewrites this document using the AI Reviewer findings"
-                + (" and your notes" if _has_user_notes else "")
-                + ", then re-runs the AI Reviewer."
-            )
-            if st.button(_btn_label, key=f"regen_{selected}", use_container_width=True, help=_btn_help):
+        if (
+            _status_data.get("status") == "REVISION"
+            and _status_data.get("notes", "").strip()
+        ):
+            if st.button(
+                "🔁 Re-generate using my notes", key=f"regen_{selected}",
+                use_container_width=True,
+                help="AI rewrites this document using the notes above as direct instructions, then re-runs the AI Reviewer.",
+            ):
                 cfg = load_config()
                 org = load_org()
-                with st.spinner("Re-generating with review findings… this may take a few minutes."):
+                with st.spinner("Re-generating with your reviewer notes… this may take a few minutes."):
                     ok, msg = _pipeline.regenerate_with_user_notes(selected, cfg, org)
                 st.cache_data.clear()
                 (st.success if ok else st.error)(msg)
                 if ok:
+                    save_status(selected, "DRAFT")
                     st.rerun()
 
         with cc:
             if content:
                 org = load_org()
                 pb, rvb, apb = _get_personnel_for_doc(org)
-                docx_bytes = export_clause_to_word(
-                    selected, content, org_name=org.get("name", ""),
-                    prepared_by=pb, reviewed_by=rvb, approved_by=apb,
-                )
+                _cfg_rev = load_config()
+                _tpl_rel = _cfg_rev.get("export", {}).get("word_template_path", "")
+                _tpl_path = str(BASE_DIR / _tpl_rel) if _tpl_rel else ""
                 st.download_button(
                     "⬇ Word",
-                    data=docx_bytes,
+                    data=export_clause_to_word(
+                        selected, content, org_name=org.get("name", ""),
+                        prepared_by=pb, reviewed_by=rvb, approved_by=apb,
+                        template_path=_tpl_path,
+                    ),
                     file_name=f"{selected}_{CLAUSE_NAMES.get(selected,'').replace(' ','_')}.docx",
                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                     key=f"dl_rev_{selected}",
                     use_container_width=True,
                     help="Download this document as a Word file with your company header and approval block.",
                 )
+                if selected in EXCEL_EXPORT_CLAUSES:
+                    st.download_button(
+                        "⬇ Excel",
+                        data=export_clause_to_excel(selected, content, org_name=org.get("name", "")),
+                        file_name=f"{selected}_{CLAUSE_NAMES.get(selected,'').replace(' ','_')}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key=f"dl_rev_xl_{selected}",
+                        use_container_width=True,
+                        help="Download risk/audit tables as a styled Excel workbook.",
+                    )
 
         if reviewer_enabled:
             if st.button(
@@ -395,6 +374,30 @@ def render() -> None:
                     st.rerun()
         elif not rev_text:
             st.caption("Enable the AI Reviewer in Organization > AI Engine to use this feature.")
+
+        # ── Scope Analyst (clause 4.3 only) ──────────────────────────────
+        if selected == "4.3":
+            _sa_key = "scope_analyst_result"
+            if st.button(
+                "🔍 Scope Analyst",
+                key="scope_analyst_btn",
+                use_container_width=False,
+                help="AI reads your org profile and the current 4.3 draft, then identifies missing locations, departments, regulatory drivers, and suggests a tighter scope boundary statement.",
+            ):
+                cfg_sa = load_config()
+                org_sa = load_org()
+                with st.spinner("Analysing scope gaps… this may take 1-2 minutes."):
+                    ok_sa, result_sa = _pipeline.run_scope_analyst(cfg_sa, org_sa)
+                st.session_state[_sa_key] = (ok_sa, result_sa)
+
+            if _sa_key in st.session_state:
+                ok_sa, result_sa = st.session_state[_sa_key]
+                with st.expander("🔍 Scope Analyst findings", expanded=True):
+                    if ok_sa:
+                        st.markdown(result_sa)
+                        st.caption("Review suggestions above and add them to your Decision notes, then re-generate.")
+                    else:
+                        st.error(result_sa)
 
         # Generated document (collapsible — keeps actions visible without scrolling)
         doc_body_html = ""
@@ -430,7 +433,7 @@ def render() -> None:
                 versions = []
             if versions:
                 with st.expander("Version History"):
-                    for i, v in enumerate(reversed(versions)):
+                    for v in reversed(versions):
                         vc1, vc2 = st.columns([5, 1])
                         with vc1:
                             ts = v.get("timestamp", "")[:16].replace("T", " ")
@@ -445,7 +448,7 @@ def render() -> None:
                                 event_tag = ""
                             st.caption(f"v{v['version']}  ·  {ts}{event_tag}")
                         with vc2:
-                            if st.button("Restore", key=f"restore_{selected}_v{v['version']}_{i}",
+                            if st.button("Restore", key=f"restore_{selected}_v{v['version']}",
                                          use_container_width=True):
                                 (OUTPUTS_DIR / f"{selected}.md").write_text(
                                     v["content"], encoding="utf-8"

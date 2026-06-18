@@ -9,7 +9,7 @@ import streamlit as st
 import pandas as pd
 
 from core import (
-    MANDATORY_ORG_FIELDS, MODEL_GUIDE, CLAUSE_NAMES, ORG_JSON_SCHEMA, get_active_clauses,
+    MANDATORY_ORG_FIELDS, MODEL_GUIDE, CLAUSE_NAMES, ORG_JSON_SCHEMA,
     load_org, save_org, load_config, save_config,
     extract_text_from_upload, extract_org_with_llm, extract_personnel_with_llm,
     _parse_asset_register, _parse_supplier_register,
@@ -45,7 +45,7 @@ def _render_html_table(rows: list[dict], columns: list[str]) -> None:
 # ---------------------------------------------------------------------------
 
 _TABS = ["Profile", "Key personnel", "Asset register", "Supplier register",
-         "GitHub", "AI engine", "Model guide"]
+         "Word template", "GitHub", "AI engine", "Model guide"]
 
 
 def render() -> None:
@@ -84,6 +84,8 @@ def render() -> None:
         _tab_asset_register()
     elif section == "supplier_register":
         _tab_supplier_register()
+    elif section == "word_template":
+        _tab_word_template()
     elif section == "github":
         _tab_github()
     elif section == "ai_engine":
@@ -185,97 +187,31 @@ def _tab_profile() -> None:
     else:
         col_left, col_right = st.columns(2)
         with col_left:
-            _manual_form_card(org)
+            if org.get("name"):
+                # Show existing profile summary
+                rows_html = ""
+                for k, lbl in MANDATORY_ORG_FIELDS:
+                    val = org.get(k, "")
+                    display = ", ".join(val) if isinstance(val, list) else str(val)
+                    if display:
+                        rows_html += (
+                            f'<div style="display:grid;grid-template-columns:160px 1fr;'
+                            f'gap:16px;padding:12px 20px;border-bottom:1px solid var(--border)">'
+                            f'<div style="font-size:12px;color:var(--ink-3);font-weight:550">{lbl}</div>'
+                            f'<div style="font-size:13px;color:var(--ink)">{display[:120]}</div>'
+                            f'</div>'
+                        )
+                st.markdown(
+                    f'<div class="card" style="margin-bottom:16px">'
+                    f'<div class="card-head"><h3 class="card-title">Current profile</h3>'
+                    f'{pill("ok", org["name"][:30], dot=False)}</div>'
+                    f'<div class="card-body flush">{rows_html}</div></div>',
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.info("No profile saved yet. Upload a company document to get started.")
         with col_right:
             _upload_card(org, cfg)
-
-
-def _manual_form_card(org: dict) -> None:
-    """Manual entry form — always visible, pre-populated from existing profile."""
-    has_profile = bool(org.get("name", "").strip())
-    title = "Edit organization profile" if has_profile else "Fill in manually"
-    badge = pill("ok", org["name"][:30], dot=False) if has_profile else ""
-
-    st.markdown(
-        f'<div class="card" style="margin-bottom:16px">'
-        f'<div class="card-head"><h3 class="card-title">{title}</h3>{badge}</div>'
-        f'<div class="card-body">',
-        unsafe_allow_html=True,
-    )
-
-    def _list_val(v) -> str:
-        if isinstance(v, list):
-            return ", ".join(str(x) for x in v)
-        return str(v) if v else ""
-
-    name     = st.text_input("Company name *", value=org.get("name", ""), key="mf_name",
-                              help="Legal name of the organization. Required.")
-    industry = st.text_input("Industry / sector", value=org.get("industry", ""), key="mf_industry",
-                              help="e.g. Software, Healthcare, Financial Services")
-    size     = st.text_input("Number of employees", value=org.get("size", ""), key="mf_size",
-                              placeholder="e.g. 45 employees",
-                              help="Approximate headcount — used in scope statement.")
-    scope    = st.text_area("What the company does (ISMS scope)", value=org.get("scope", ""),
-                             key="mf_scope", height=80,
-                             placeholder="1–2 sentences: core business + IT activities in scope",
-                             help="This becomes the ISMS scope statement for Clause 4.3.")
-    locations = st.text_input("Where the company operates", value=_list_val(org.get("locations")),
-                               key="mf_locations", placeholder="e.g. Berlin, London, Remote",
-                               help="Comma-separated list of offices or operating regions.")
-    processes = st.text_input("Main services or products", value=_list_val(org.get("primary_processes")),
-                               key="mf_processes", placeholder="e.g. SaaS platform, Data analytics, Consulting",
-                               help="Comma-separated list of core business activities.")
-    depts    = st.text_input("Departments / teams", value=_list_val(org.get("departments")),
-                              key="mf_depts", placeholder="e.g. R&D, Sales, IT, HR",
-                              help="Comma-separated list of internal teams in scope.")
-    regs     = st.text_input("Data privacy & regulatory drivers", value=_list_val(org.get("regulatory_drivers") or org.get("legal_basis")),
-                              key="mf_regs", placeholder="e.g. GDPR, NIS2, ISO 27001, TISAX",
-                              help="Comma-separated regulations or standards the company must comply with.")
-    controls = st.text_input("Existing security measures", value=_list_val(org.get("existing_controls")),
-                              key="mf_controls", placeholder="e.g. MFA, VPN, Antivirus, Firewall",
-                              help="Comma-separated security controls already in place.")
-
-    st.markdown(
-        '<div class="hint" style="margin-top:8px">Fields marked * are required. '
-        'All changes save to <code>inputs/organization_data.json</code> — never sent to the cloud.</div>',
-        unsafe_allow_html=True,
-    )
-    st.markdown('</div></div>', unsafe_allow_html=True)
-
-    # Persist save feedback across rerun
-    if st.session_state.get("_org_saved"):
-        st.success(
-            "Organization profile saved. "
-            "Next: add **Key Personnel** (managers, CISO, DPO) in the tab above — "
-            "they appear in document headers and review sign-offs."
-        )
-        st.session_state.pop("_org_saved", None)
-
-    if st.button("Save Organization Profile", type="primary", key="btn_manual_save",
-                 use_container_width=True,
-                 help="Save these details. You can come back and edit at any time."):
-        if not name.strip():
-            st.error("Company name is required.")
-        else:
-            def _parse_list(raw: str) -> list:
-                return [x.strip() for x in raw.split(",") if x.strip()]
-
-            form_data = {
-                "name":              name.strip(),
-                "industry":          industry.strip(),
-                "size":              size.strip(),
-                "scope":             scope.strip(),
-                "locations":         _parse_list(locations),
-                "primary_processes": _parse_list(processes),
-                "departments":       _parse_list(depts),
-                "regulatory_drivers": _parse_list(regs),
-                "legal_basis":       _parse_list(regs),
-                "existing_controls": _parse_list(controls),
-            }
-            final = {**load_org(), **form_data}
-            save_org(final)
-            st.session_state["_org_saved"] = True
-            st.rerun()
 
 
 def _upload_card(org: dict, cfg: dict) -> None:
@@ -298,12 +234,19 @@ def _upload_card(org: dict, cfg: dict) -> None:
 
     uploaded_file = st.file_uploader(
         "Upload company document",
-        type=["pdf", "docx", "txt", "md", "html", "htm"],
+        type=["pdf", "docx", "txt", "html", "htm"],
         label_visibility="collapsed",
         help="Drop a PDF, Word (.docx), plain-text, or HTML file describing your company. The AI reads it and fills in your profile automatically.",
     )
 
     if uploaded_file:
+        # Reject old-style binary .doc files (Bug I2)
+        if uploaded_file.name.lower().endswith(".doc") and not uploaded_file.name.lower().endswith(".docx"):
+            st.error(
+                "Old Word format (.doc) is not supported. "
+                "Please save the file as Word (.docx) using File → Save As in Microsoft Word, then upload again."
+            )
+            st.stop()
         if uploaded_file.size > 5 * 1024 * 1024:
             st.warning("Large file detected — only the first 5,000 words will be used.")
         if st.button("Extract with AI", type="primary", key="btn_extract"):
@@ -346,61 +289,25 @@ def _upload_card(org: dict, cfg: dict) -> None:
 # Key Personnel tab
 # ---------------------------------------------------------------------------
 
-_UNNAMED_PATTERNS = {"unnamed", "unknown", "tbd", "n/a", "na", "", "-", "—"}
-
-def _kp_is_valid(p: dict) -> bool:
-    name = p.get("name", "").strip()
-    if not name:
-        return False
-    # Strip surrounding parentheses/brackets then check against placeholder words
-    clean = name.strip("()[]").lower()
-    return clean not in _UNNAMED_PATTERNS and not clean.startswith("unnamed")
-
-
 def _tab_personnel() -> None:
     org = load_org()
     cfg = load_config()
     current = org.get("key_personnel", [])
 
-    # Persist save feedback across rerun
-    if st.session_state.get("_kp_saved"):
-        n = st.session_state.pop("_kp_saved")
-        st.success(f"Saved {n} person(s) to `inputs/organization_data.json`.")
-
     if current:
-        st.markdown(
-            '<div class="hint" style="margin-bottom:8px">Edit roles or names inline, then click '
-            '<strong>Save changes</strong> to apply.</div>',
-            unsafe_allow_html=True,
-        )
         for i, p in enumerate(current):
             c1, c2, c3 = st.columns([3, 4, 1])
             with c1:
-                st.text_input("Role", value=p.get("role", ""), key=f"kp_role_{i}",
-                              label_visibility="collapsed" if i > 0 else "visible")
+                st.text_input("Role", value=p.get("role", ""), key=f"kp_role_{i}")
             with c2:
-                st.text_input("Name", value=p.get("name", ""), key=f"kp_name_{i}",
-                              label_visibility="collapsed" if i > 0 else "visible")
+                st.text_input("Name", value=p.get("name", ""), key=f"kp_name_{i}")
             with c3:
                 st.write("")
                 if st.button("Remove", key=f"kp_del_{i}"):
                     current.pop(i)
                     org["key_personnel"] = current
                     save_org(org)
-                    st.session_state["_kp_saved"] = 0
                     st.rerun()
-
-        if st.button("Save changes", key="kp_save_edits", type="primary"):
-            updated = []
-            for i in range(len(current)):
-                role = st.session_state.get(f"kp_role_{i}", "").strip()
-                name = st.session_state.get(f"kp_name_{i}", "").strip()
-                if role and name:
-                    updated.append({"role": role, "name": name})
-            org["key_personnel"] = updated
-            save_org(org)
-            st.session_state["_kp_saved"] = len(updated)
-            st.rerun()
     else:
         st.info("No key personnel saved yet. Add manually or extract from an org chart below.")
 
@@ -413,7 +320,7 @@ def _tab_personnel() -> None:
                 current.append({"role": new_role.strip(), "name": new_name.strip()})
                 org["key_personnel"] = current
                 save_org(org)
-                st.session_state["_kp_saved"] = len(current)
+                st.success(f"Added: {new_name} ({new_role})")
                 st.rerun()
             else:
                 st.warning("Both role and name are required.")
@@ -423,21 +330,19 @@ def _tab_personnel() -> None:
     st.caption("Upload an org chart, HR document, or any file listing employee names and roles.")
 
     if kp_file := st.file_uploader("Upload org chart or HR document",
-                                    type=["pdf", "docx", "txt", "md", "html", "htm"], key="kp_upload"):
+                                    type=["pdf", "docx", "txt"], key="kp_upload"):
         if st.button("Extract names and roles", key="kp_extract_btn", type="primary"):
             with st.spinner("Extracting names from document…"):
                 text = extract_text_from_upload(kp_file)
                 if text:
                     extracted_kp = extract_personnel_with_llm(text, cfg)
                     if extracted_kp is not None:
-                        # Filter unnamed/placeholder entries in code — not just LLM rules
-                        valid = [p for p in extracted_kp if _kp_is_valid(p)]
-                        st.session_state["extracted_kp"] = valid
+                        st.session_state["extracted_kp"] = extracted_kp
 
     if "extracted_kp" in st.session_state:
         extracted_kp = st.session_state["extracted_kp"]
         if extracted_kp:
-            st.success(f"Found {len(extracted_kp)} person(s) — review and save:")
+            st.success(f"Found {len(extracted_kp)} person(s):")
             for p in extracted_kp:
                 st.markdown(f"- **{p.get('name','')}** — {p.get('role','')}")
             if st.button("Save extracted personnel", type="primary", key="kp_save_btn"):
@@ -450,7 +355,7 @@ def _tab_personnel() -> None:
                 org["key_personnel"] = current
                 save_org(org)
                 st.session_state.pop("extracted_kp", None)
-                st.session_state["_kp_saved"] = added
+                st.success(f"Saved {added} new person(s).")
                 st.rerun()
         else:
             st.warning("No named personnel found in the document. Try a different file or add manually.")
@@ -607,6 +512,52 @@ def _tab_supplier_register() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Word Template tab
+# ---------------------------------------------------------------------------
+
+def _tab_word_template() -> None:
+    import yaml as _yaml
+    cfg = load_config()
+    current = cfg.get("export", {}).get("word_template_path", "")
+    tpl_path = BASE_DIR / current if current else None
+
+    st.caption(
+        "Upload your company's branded .docx as the export template. "
+        "The tool clears the body and injects generated content while keeping "
+        "your header, footer, and paragraph styles."
+    )
+
+    if tpl_path and tpl_path.exists():
+        st.success(f"Active template: `{current}`")
+        if st.button("Remove template (revert to default styling)", key="remove_word_tpl"):
+            cfg.setdefault("export", {})["word_template_path"] = ""
+            with open(BASE_DIR / "config.yaml", "w", encoding="utf-8") as _f:
+                _yaml.dump(cfg, _f, allow_unicode=True, default_flow_style=False)
+            st.cache_data.clear()
+            st.success("Template removed.")
+            st.rerun()
+    else:
+        st.info("No custom template set — using built-in VaultISO27 styling.")
+
+    tpl_file = st.file_uploader(
+        "Upload Word template (.docx)", type=["docx"], key="word_template_upload",
+        help="Your company's branded Word template. Header, footer, and styles will be applied to all exported clause documents.",
+    )
+    if tpl_file:
+        tpl_dir = BASE_DIR / "inputs" / "templates"
+        tpl_dir.mkdir(parents=True, exist_ok=True)
+        dest = tpl_dir / "word_template.docx"
+        dest.write_bytes(tpl_file.read())
+        rel = str(dest.relative_to(BASE_DIR))
+        cfg.setdefault("export", {})["word_template_path"] = rel
+        with open(BASE_DIR / "config.yaml", "w", encoding="utf-8") as _f:
+            _yaml.dump(cfg, _f, allow_unicode=True, default_flow_style=False)
+        st.cache_data.clear()
+        st.success("Template saved. All future Word exports will use this template.")
+        st.rerun()
+
+
+# ---------------------------------------------------------------------------
 # GitHub tab
 # ---------------------------------------------------------------------------
 
@@ -685,7 +636,7 @@ def _tab_ai_engine() -> None:
         st.markdown('<div class="card"><div class="card-head"><h3 class="card-title">Document generator</h3></div><div class="card-body">', unsafe_allow_html=True)
         base_url  = st.text_input(
             "AI Engine URL", value=cfg["llm"]["base_url"],
-            help="Where Ollama is running. Default is http://localhost:11434 — only change if Ollama runs on a different machine.",
+            help="Network address of the Ollama service running on your machine. Leave as-is unless Ollama is installed on a different computer on your network.",
         )
         available = get_ollama_models(base_url)
         if available:
@@ -693,18 +644,18 @@ def _tab_ai_engine() -> None:
             idx = available.index(cfg["llm"]["model"]) if cfg["llm"]["model"] in available else 0
             selected_model = st.selectbox(
                 "Generation model", available, index=idx, key="gen_model_sel",
-                help="The AI that writes your ISO 27001 documents. Larger models give better wording but run slower.",
+                help="The AI model that drafts your ISO 27001 documents. Larger models produce more detailed, accurate text but take longer to run. phi4-mini is the recommended balance for most machines.",
             )
         else:
             st.error("AI engine not reachable. Make sure Ollama is running.")
             selected_model = st.text_input("Model name (manual)", value=cfg["llm"]["model"], key="gen_model_manual")
         temperature = st.slider(
             "Creativity level", 0.0, 1.0, float(cfg["llm"]["temperature"]), 0.05,
-            help="Higher = more varied wording. Keep low (0.2-0.3) for compliance text.",
+            help="Controls how predictable the AI's writing is. Low (0.1-0.3) = formal, consistent, auditor-safe. High (0.7+) = more creative but less reliable for compliance documents. Recommended: 0.3.",
         )
         top_k = st.number_input(
             "ISO reference chunks per document", 1, 10, int(cfg["rag"]["top_k"]),
-            help="How many ISO 27001 reference snippets the AI sees per document. More = more accurate but slower.",
+            help="How many ISO 27001 standard requirements the AI reads before writing each document. Higher = more thorough coverage of the standard, but generation takes a bit longer. 3 is the recommended value.",
         )
         st.markdown('</div></div>', unsafe_allow_html=True)
 
@@ -713,13 +664,13 @@ def _tab_ai_engine() -> None:
         critic_cfg     = cfg.get("critic", {})
         critic_enabled = st.toggle(
             "Enable AI Reviewer", value=critic_cfg.get("enabled", True),
-            help="Turn on to have a second AI check every generated document against ISO 27001 and ask the writer to fix problems automatically.",
+            help="When enabled, a second AI model reads each draft and checks it against ISO 27001 requirements. If it finds gaps, the document is automatically rewritten and checked again. Adds 1-3 minutes per document but significantly improves quality.",
         )
         if available:
             cidx         = available.index(critic_cfg.get("model","")) if critic_cfg.get("model","") in available else 0
             critic_model = st.selectbox(
                 "Reviewer model", available, index=cidx, key="rev_model_sel",
-                help="The AI that critiques the documents. A small fast model is fine here.",
+                help="The AI model used to review and score each document. A small, fast model works well here — it only needs to read and judge, not write. qwen2.5:1.5b is recommended.",
             )
         else:
             critic_model = st.text_input("Reviewer model name", value=critic_cfg.get("model","qwen2.5:1.5b"), key="rev_model_manual")
@@ -727,40 +678,104 @@ def _tab_ai_engine() -> None:
         max_rev = st.number_input(
             "Maximum auto-revision attempts", 0, 5,
             int(critic_cfg.get("max_revisions", 2)),
-            help="How many times the writer is allowed to fix the document after reviewer feedback. 2 is usually enough.",
+            help="After the reviewer finds problems, the document is automatically rewritten and re-checked. This setting caps how many rewrite rounds happen. 2 rounds is enough for most documents — more rounds take longer with diminishing returns.",
         )
-        _active = get_active_clauses()
-        _default_auto = [c for c in critic_cfg.get("auto_clauses", ["5.2","6.1.2","6.1.3","9.3"]) if c in _active]
         auto_cl = st.multiselect(
             "Auto-review these documents after generation",
-            list(_active.keys()),
-            default=_default_auto,
+            list(CLAUSE_NAMES.keys()),
+            default=critic_cfg.get("auto_clauses", ["5.2","6.1.2","6.1.3","9.3"]),
             format_func=lambda x: f"{x} — {CLAUSE_NAMES[x]}",
-            help="Pick which documents the reviewer should auto-check. Defaults to the high-stakes clauses.",
+            help="The reviewer runs automatically after generation for these documents. Focus on the ones auditors scrutinise most: risk assessment, policy, and audit documents. You can always trigger a manual review from the Review tab for any other document.",
         )
         st.markdown('</div></div>', unsafe_allow_html=True)
 
-    # Hardware tier info
+    # Hardware tier info (Bug I3 — ensure cpu_rich has a readable label)
+    _tier_labels = {
+        "high":     "High-end GPU (12 GB+ VRAM)",
+        "mid":      "Mid-range GPU (6–12 GB VRAM)",
+        "cpu_rich": "CPU-rich (16 GB+ RAM)",
+        "low":      "Low RAM (8–16 GB)",
+        "minimal":  "Minimal (<8 GB RAM)",
+        "unknown":  "Unknown",
+    }
     timeouts = cfg.get("timeouts", {})
     tier_name = timeouts.get("hardware_tier", "unknown")
+    tier_label = _tier_labels.get(tier_name, tier_name)
     t_gen  = timeouts.get("ollama_generate", 600)
     t_swap = timeouts.get("model_swap_delay", 12)
     det_ram  = timeouts.get("detected_ram_gb", "?")
     det_vram = timeouts.get("detected_vram_gb", "?")
     st.caption(
-        f"Hardware tier: **{tier_name}** ({det_ram} GB RAM · {det_vram} GB VRAM) — "
+        f"Hardware tier: **{tier_label}** ({det_ram} GB RAM · {det_vram} GB VRAM) — "
         f"generation timeout: {t_gen}s · model-swap delay: {t_swap}s"
     )
+
+    with st.expander("Generation Parameters (model-adaptive)", expanded=False):
+        st.caption(
+            "How much content the AI writes per document. Smaller models (phi4-mini) produce "
+            "better quality with fewer table rows. Larger models (gemma4) can handle more."
+        )
+        ic = cfg.get("generation", {}).get("item_counts", {})
+        gp_col1, gp_col2 = st.columns(2)
+        with gp_col1:
+            new_min_risks = st.number_input(
+                "Risks per risk document", 1, 10, int(ic.get("min_risks", 5)),
+                help="Rows in the Risk Assessment and Risk Treatment tables. Recommended: 3 for phi4-mini, 5 for gemma4.",
+            )
+            new_min_objectives = st.number_input(
+                "Security objectives (Clause 6.2)", 1, 10, int(ic.get("min_objectives", 5)),
+                help="How many SMART objectives to define. Recommended: 4 for small models, 5 for large.",
+            )
+        with gp_col2:
+            new_min_metrics = st.number_input(
+                "KPI metrics (Clause 9.1)", 1, 10, int(ic.get("min_metrics", 6)),
+                help="Rows in the monitoring dashboard. Recommended: 4 for phi4-mini, 6 for gemma4.",
+            )
+            new_min_improvements = st.number_input(
+                "Improvement items (Clause 10.2)", 1, 6, int(ic.get("min_improvements", 3)),
+                help="Sample rows in the continual improvement register. 3 is sufficient for most models.",
+            )
+        if st.button("Save generation parameters", key="save_gen_params"):
+            cfg.setdefault("generation", {})
+            cfg["generation"].setdefault("item_counts", {})
+            cfg["generation"]["item_counts"].update({
+                "min_risks": new_min_risks,
+                "risk_range": f"{new_min_risks}-{new_min_risks + 2}",
+                "min_objectives": new_min_objectives,
+                "obj_range": f"{new_min_objectives}-{new_min_objectives + 2}",
+                "min_metrics": new_min_metrics,
+                "metric_range": f"{new_min_metrics}-{new_min_metrics + 2}",
+                "min_improvements": new_min_improvements,
+                "table_note": ic.get("table_note", ""),
+            })
+            save_config(cfg)
+            st.success("Generation parameters saved.")
+
     col_save, col_redetect = st.columns([2, 1])
     with col_save:
         save_btn = st.button("Save AI engine settings", type="primary")
     with col_redetect:
-        if st.button("Re-detect hardware", key="redetect_hw"):
-            import subprocess, sys
-            from core import BASE_DIR as _BD
-            subprocess.run([sys.executable, str(_BD / "setup_config.py")], cwd=str(_BD))
-            st.success("Hardware re-detected. Reload page to see updated settings.")
-            st.rerun()
+        if st.button("Re-detect hardware", key="redetect_hw",
+                     help="Probe RAM and VRAM, pick the best hardware tier, and update config.yaml timeouts and model settings."):
+            try:
+                import setup_config as _sc
+                _hw  = _sc.detect_hardware()
+                _tier = _sc.select_tier(_hw)
+                _sc.apply_to_config(_hw, _tier)
+                _adapters = _sc.detect_vram_list()
+                _vram_detail = (
+                    f"{', '.join(str(g) + ' GB' for g in _adapters)} across {len(_adapters)} adapter(s)"
+                    if _adapters else "none detected"
+                )
+                _new_tier_label = _tier_labels.get(_tier["name"], _tier["name"])
+                st.success(
+                    f"Hardware re-detected and config.yaml updated.  "
+                    f"RAM: {_hw['ram_gb']} GB  |  VRAM: {_vram_detail}  |  "
+                    f"Tier: {_new_tier_label}  |  Gen model: {_tier['gen_model']}"
+                )
+                st.rerun()
+            except Exception as _e:
+                st.error(f"Re-detection failed: {_e}")
 
     if save_btn:
         cfg["llm"]["base_url"]    = base_url
@@ -780,72 +795,26 @@ def _tab_ai_engine() -> None:
 # ---------------------------------------------------------------------------
 
 def _tab_model_guide() -> None:
-    cfg = load_config()
     hw = detect_hardware()
     ram = hw["ram_gb"]
     vram = hw["vram_gb"]
     cpu = hw["cpu"]
     hw_line = f"{cpu} · {ram} GB RAM" + (f" · {vram} GB VRAM" if vram else " · No NVIDIA GPU detected")
-
-    # Use hardware_tier from setup_config.py if available; else derive from live detection.
-    # VRAM-fit first: a tier only gets a big model if the model fits the card's VRAM —
-    # RAM alone never qualifies for a big model (it would spill to CPU and run 5-10x slower).
-    tier = cfg.get("timeouts", {}).get("hardware_tier", "")
-    if not tier:
-        if vram >= 12:   tier = "high"
-        elif vram >= 6:  tier = "mid"
-        elif ram >= 16:  tier = "cpu_rich"
-        elif ram >= 8:   tier = "low"
-        else:            tier = "minimal"
-
-    tier_labels = {
-        "high":     "High-end (12 GB+ VRAM)",
-        "mid":      "Mid-range (6–12 GB VRAM)",
-        "cpu_rich": "CPU-rich (16 GB+ RAM, <6 GB VRAM)",
-        "low":      "Standard (8–16 GB RAM)",
-        "minimal":  "Minimal (<8 GB RAM, CPU-only)",
-    }
-    tier_why = {
-        "high":     "Your GPU fits the largest model entirely in VRAM — best quality at GPU speed (~1–2 min per document).",
-        "mid":      "Your GPU fits a strong mid-size model in VRAM — good quality at GPU speed (~2–4 min per document).",
-        "cpu_rich": "No model worth running fits your VRAM, so generation runs on CPU+RAM. A small fast model "
-                    "(phi4-mini) beats a large one spilling out of VRAM at 5–10x slower (~8–15 min per document).",
-        "low":      "Limited RAM and no usable VRAM — a small fast model keeps generation usable (~10–20 min per document).",
-        "minimal":  "Very limited RAM — only the smallest model runs; quality is limited (~5–10 min per document).",
-    }
-    st.info(
-        f"**Detected hardware:** {hw_line}  \n"
-        f"**Tier:** {tier_labels.get(tier, tier)} — models highlighted in teal are recommended for your machine.  \n"
-        f"**Why this recommendation:** {tier_why.get(tier, '')}"
-    )
-
-    col_redetect, _ = st.columns([1, 3])
-    with col_redetect:
-        if st.button("Re-detect hardware", key="redetect_hw_guide"):
-            import subprocess as _sp
-            from core import BASE_DIR as _BD
-            _sp.run([sys.executable, str(_BD / "setup_config.py")], cwd=str(_BD))
-            st.success("Hardware re-detected. Reload to see updated settings.")
-            detect_hardware.clear()
-            st.rerun()
+    st.caption(f"Detected hardware: {hw_line}")
 
     cards_html = ""
     for m in MODEL_GUIDE:
-        recommended = tier in m.get("tiers", [])
+        recommended = (m["min_ram_gb"] <= ram)
         border = "border:2px solid var(--accent);" if recommended else ""
-        badge = (
-            "&nbsp;&nbsp;<span style='font-size:10px;background:var(--accent);color:white;"
-            "border-radius:4px;padding:1px 6px'>recommended</span>"
-        ) if recommended else ""
         cards_html += (
             f'<div class="card" style="padding:0;{border}">'
             f'<div class="card-body">'
-            f'<div class="mono" style="font-size:13px;font-weight:500;color:var(--ink)">'
-            f'{m["Model"]}{badge}</div>'
+            f'<div class="mono" style="font-size:13px;font-weight:500;color:var(--ink)">{m["Model"]}'
+            f'{"&nbsp;&nbsp;<span style=\'font-size:10px;background:var(--accent);color:white;border-radius:4px;padding:1px 6px\'>recommended</span>" if recommended else ""}'
+            f'</div>'
             f'<div style="font-size:12px;color:var(--ink-3);margin:4px 0 12px">{m["Best for"]}</div>'
             f'<div class="meta-row"><span class="k">VRAM</span><span class="v mono">{m["VRAM"]}</span></div>'
             f'<div class="meta-row"><span class="k">Speed</span><span class="v mono">{m["Speed"]}</span></div>'
-            f'<div class="meta-row"><span class="k">Time</span><span class="v mono">{m.get("Doc time", "—")}</span></div>'
             f'<div style="margin-top:12px;background:var(--surface-3);border-radius:6px;'
             f'padding:8px 10px;font-family:var(--font-mono);font-size:11.5px;color:var(--ink-2)">'
             f'{m["Install"]}</div>'
@@ -858,12 +827,10 @@ def _tab_model_guide() -> None:
     st.markdown("""
 **How to install** — open a terminal and run the install command shown in the card.
 
-**Important rules for limited GPU memory (<6 GB):**
+**Important rules for limited GPU memory (2 GB):**
 - Only one model can run at a time
-- Ollama switches models automatically, but each generator↔reviewer switch costs a model reload
-- Bigger is not faster here: a model that doesn't fit your VRAM spills to CPU and runs 5–10x slower —
-  the recommended model is the best quality your machine can run at usable speed
-- For machines with 12 GB+ VRAM, gemma4:12b-it-qat gives significantly better document quality
+- Ollama switches models automatically, but it adds ~10 seconds per switch
+- For machines with 8 GB+ VRAM, use mistral:7b for significantly better document quality
 
 **Offline operation:** After first setup, VaultISO27 runs 100% offline — no internet connection needed.
     """)

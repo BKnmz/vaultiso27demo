@@ -91,11 +91,6 @@ section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] {
   letter-spacing: -0.01em; color: var(--ink);
 }
 .brand-sub { font-size: 11px; color: var(--ink-3); font-weight: 500; margin-top: 1px; }
-.demo-badge {
-  display: inline-block; font-size: 9px; font-weight: 700; letter-spacing: 0.06em;
-  padding: 1px 5px; border-radius: 4px; vertical-align: middle; margin-left: 4px;
-  background: oklch(0.55 0.18 250); color: #fff; font-family: var(--font-mono);
-}
 
 .nav-label {
   font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.08em;
@@ -219,6 +214,20 @@ section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] {
 .tbl tr:hover td { background: var(--surface-2); }
 .tbl td.name { color: var(--ink); font-weight: 500; }
 .tbl .sec { font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-3); }
+
+/* ── Document table rows (Documents page) ── */
+.docrow {
+  transition: background .08s, border-left-color .08s, box-shadow .08s !important;
+  padding: 0 !important;
+  border-left: 3px solid transparent;
+  display: flex !important;
+  align-items: center !important;
+}
+.docrow:hover {
+  background: var(--surface-2) !important;
+  border-left-color: var(--ink) !important;
+  box-shadow: inset 0 0 0 1px var(--border) !important;
+}
 
 /* ── Stepper ── */
 .stepper {
@@ -365,5 +374,11 @@ div[data-testid="element-container"] { background: transparent !important; }
 ::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 8px; border: 2px solid var(--bg); }
 ::-webkit-scrollbar-thumb:hover { background: var(--ink-4); }
 [data-testid="stMain"] { overflow-y: auto !important; }
+
+/* ── PDCA phase badges ── */
+.pdca-plan  { background:#2563eb; color:#fff; padding:2px 8px; border-radius:4px; font-size:0.75rem; font-weight:600; }
+.pdca-do    { background:#16a34a; color:#fff; padding:2px 8px; border-radius:4px; font-size:0.75rem; font-weight:600; }
+.pdca-check { background:#d97706; color:#fff; padding:2px 8px; border-radius:4px; font-size:0.75rem; font-weight:600; }
+.pdca-act   { background:#dc2626; color:#fff; padding:2px 8px; border-radius:4px; font-size:0.75rem; font-weight:600; }
 </style>
 """

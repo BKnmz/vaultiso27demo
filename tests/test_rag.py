@@ -1,6 +1,5 @@
 """
 Tests for rag_setup.py — Excel parsing and ChromaDB indexing.
-Adapted for the demo repo: ISO27001_Audit_Checklist_demo.xlsx (21 Annex A controls).
 These tests run without Ollama.
 """
 
@@ -20,7 +19,7 @@ from rag_setup import (
 import openpyxl
 
 
-EXCEL_PATH = Path(__file__).parent.parent / "rag" / "ISO27001_Audit_Checklist_demo.xlsx"
+EXCEL_PATH = Path(__file__).parent.parent / "rag" / "ISO27001_Audit_Checklist_V3.xlsx"
 
 
 class TestClean(unittest.TestCase):
@@ -51,9 +50,9 @@ class TestGeneralClausesParsing(unittest.TestCase):
         ids = [d["control_id"] for d in self.docs]
         self.assertIn("4.1", ids)
 
-    def test_clause_43_present(self):
+    def test_clause_93_present(self):
         ids = [d["control_id"] for d in self.docs]
-        self.assertIn("4.3", ids)
+        self.assertIn("9.3", ids)
 
     def test_required_fields(self):
         for doc in self.docs:
@@ -85,8 +84,7 @@ class TestSoAParsing(unittest.TestCase):
         self.assertIsInstance(self.docs, list)
 
     def test_has_annex_a_controls(self):
-        # Demo SoA has 22 controls (subset of 93)
-        self.assertGreater(len(self.docs), 5)
+        self.assertGreater(len(self.docs), 50)
 
     def test_control_ids_have_dots(self):
         for doc in self.docs:
@@ -97,6 +95,7 @@ class TestSoAParsing(unittest.TestCase):
         self.assertIn("A.5.1", ids)
 
     def test_no_section_headers(self):
+        # Section group rows like "A5" should be excluded
         ids = [d["control_id"] for d in self.docs]
         self.assertNotIn("A5", ids)
         self.assertNotIn("A6", ids)
@@ -124,7 +123,7 @@ class TestAnnexSheetParsing(unittest.TestCase):
 
     def test_descriptions_non_empty(self):
         non_empty = [d for d in self.docs_a5 if d["description"]]
-        self.assertGreater(len(non_empty), 0)
+        self.assertGreater(len(non_empty), len(self.docs_a5) // 2)
 
     def test_sheet_label(self):
         for doc in self.docs_a5:
@@ -176,8 +175,7 @@ class TestChromaDBIndex(unittest.TestCase):
 
     def test_collection_not_empty(self):
         count = self.collection.count()
-        # Demo has ~50+ entries (general clauses + 22 SoA + 21 Annex A controls)
-        self.assertGreater(count, 20)
+        self.assertGreater(count, 50)
 
     def test_exact_match_clause_43(self):
         r = self.collection.get(where={"control_id": {"$eq": "4.3"}})
@@ -187,15 +185,15 @@ class TestChromaDBIndex(unittest.TestCase):
         r = self.collection.get(where={"control_id": {"$eq": "A.5.1"}})
         self.assertGreater(len(r["ids"]), 0, "A.5.1 not found in index")
 
-    def test_semantic_query_policy(self):
-        emb = self.model.encode(["information security policy"]).tolist()
+    def test_semantic_query_access_control(self):
+        emb = self.model.encode(["access control policy"]).tolist()
         r = self.collection.query(query_embeddings=emb, n_results=3)
         ids = [m["control_id"] for m in r["metadatas"][0]]
-        # Should return policy-related entries present in demo
-        policy_controls = {"A.5.1", "5.2", "5.1", "A.5.2"}
+        # Should return access-control related controls
+        access_controls = {"A.5.15", "A.5.18", "A.8.3", "A.8.2"}
         self.assertTrue(
-            any(cid in policy_controls for cid in ids),
-            f"Expected policy results, got: {ids}"
+            any(cid in access_controls for cid in ids),
+            f"Expected access control results, got: {ids}"
         )
 
     def test_semantic_query_risk_assessment(self):

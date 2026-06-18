@@ -149,7 +149,8 @@ class TestOutputCache(unittest.TestCase):
             clause_id = "4.3"
             rag_ctx = "cached rag"
             skill_text = (BASE_DIR / "skills" / "4.3_scope.md").read_text(encoding="utf-8")
-            h = pipeline.content_hash(json.dumps(SAMPLE_ORG, sort_keys=True), rag_ctx, skill_text)
+            item_counts_str = json.dumps(cfg.get("generation", {}).get("item_counts", {}), sort_keys=True)
+            h = pipeline.content_hash(json.dumps(SAMPLE_ORG, sort_keys=True), rag_ctx, skill_text, item_counts_str)
 
             (outputs_dir / f"{clause_id}.md").write_text("Cached document content")
             (outputs_dir / f"{clause_id}.hash").write_text(h)

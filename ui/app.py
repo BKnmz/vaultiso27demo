@@ -15,7 +15,7 @@ if str(_UI_DIR) not in sys.path:
 
 from core import (
     load_config, completion_stats, get_clause_status,
-    CLAUSE_NAMES, OUTPUTS_DIR, __version__, get_active_clauses,
+    CLAUSE_NAMES, OUTPUTS_DIR, __version__,
 )
 from styles import CSS
 from icons import icon
@@ -43,8 +43,8 @@ def _render_sidebar(page: str, pending_count: int, cfg: dict) -> None:
     <div class="sidebar-brand">
       <div class="brand-mark">V</div>
       <div>
-        <div class="brand-name">VaultISO27 <span class="demo-badge">DEMO</span></div>
-        <div class="brand-sub">ISO 27001:2022 · 10-clause edition</div>
+        <div class="brand-name">VaultISO27</div>
+        <div class="brand-sub">ISO 27001:2022</div>
       </div>
     </div>
     <div class="nav-label">Main</div>
@@ -55,6 +55,7 @@ def _render_sidebar(page: str, pending_count: int, cfg: dict) -> None:
     {nav("documents",  "Documents",          "folder")}
     <div class="nav-label">Compliance</div>
     {nav("annex",      "Annex A Controls",   "grid")}
+    {nav("risk",       "Risk Register",      "shield")}
     {nav("knowledge",  "Knowledge Base",     "search")}
     <div style="margin-top:auto">
       <div class="sidebar-footer">
@@ -80,7 +81,7 @@ def _render_sidebar(page: str, pending_count: int, cfg: dict) -> None:
 # ---------------------------------------------------------------------------
 
 def _route(page: str) -> None:
-    from _pages import dashboard, organization, generate, review, documents, annex, knowledge
+    from _pages import dashboard, organization, generate, review, documents, annex, knowledge, risk
     pages = {
         "dashboard": dashboard,
         "org":        organization,
@@ -89,6 +90,7 @@ def _route(page: str) -> None:
         "documents":  documents,
         "annex":      annex,
         "knowledge":  knowledge,
+        "risk":       risk,
     }
     mod = pages.get(page, dashboard)
     mod.render()
@@ -100,8 +102,8 @@ def _route(page: str) -> None:
 
 def main() -> None:
     st.set_page_config(
-        page_title="VaultISO27 Demo",
-        page_icon="🔓",
+        page_title="VaultISO27",
+        page_icon="V",
         layout="wide",
         initial_sidebar_state="expanded",
     )
@@ -113,7 +115,7 @@ def main() -> None:
         cfg = {"llm": {"model": "—"}}
 
     pending_docs = [
-        cid for cid in get_active_clauses()
+        cid for cid in CLAUSE_NAMES
         if get_clause_status(cid) in ("DRAFT", "REVISION")
         and (OUTPUTS_DIR / f"{cid}.md").exists()
     ]

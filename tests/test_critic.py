@@ -69,6 +69,18 @@ class TestParseOverallAssessment(unittest.TestCase):
         text = "**Overall Assessment:** pass"
         self.assertEqual(critic.parse_overall_assessment(text), "PASS")
 
+    def test_placeholder_echo_is_unknown_not_fail(self):
+        # Model copied the bracketed template verbatim instead of deciding.
+        # This must surface as UNKNOWN, not a silent FAIL on the example text.
+        text = "**Overall Assessment:** [PASS / CONDITIONAL PASS / FAIL]"
+        self.assertEqual(critic.parse_overall_assessment(text), "UNKNOWN")
+
+    def test_conditional_checked_before_fail(self):
+        # A line mentioning both words must resolve to CONDITIONAL PASS,
+        # not FAIL (FAIL-first ordering was the bug).
+        text = "**Overall Assessment:** CONDITIONAL PASS (would otherwise FAIL without fixes)"
+        self.assertEqual(critic.parse_overall_assessment(text), "CONDITIONAL PASS")
+
 
 class TestClauseFocusCompleteness(unittest.TestCase):
     def test_all_clause_names_have_focus(self):

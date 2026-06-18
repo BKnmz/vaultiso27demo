@@ -11,17 +11,19 @@ import streamlit as st
 from datetime import datetime
 
 from core import (
-    CLAUSE_NAMES, STATUS_KIND, REVIEW_RESULT, OUTPUTS_DIR, get_active_clauses,
+    CLAUSE_NAMES, STATUS_KIND, REVIEW_RESULT, OUTPUTS_DIR,
+    EXCEL_EXPORT_CLAUSES, BASE_DIR,
     get_clause_status, get_review_assessment, read_output,
-    load_org, load_config, export_clause_to_word, export_all_to_excel,
-    export_soa_to_excel, upload_clause_to_github, _get_personnel_for_doc,
-    load_annex_a,
+    load_org, load_config, export_clause_to_word, export_clause_to_excel,
+    export_all_to_excel, export_soa_to_excel, upload_clause_to_github,
+    _get_personnel_for_doc, load_annex_a,
 )
 from components import page_head, pill
 from icons import icon
 
 
-def _build_zip_of_all_docx(generated: list[tuple[str, str]], org: dict) -> bytes:
+def _build_zip_of_all_docx(generated: list[tuple[str, str]], org: dict,
+                            template_path: str = "") -> bytes:
     """Bundle every generated clause as .docx into a single zip in memory."""
     pb, rvb, apb = _get_personnel_for_doc(org)
     buf = io.BytesIO()
@@ -33,6 +35,7 @@ def _build_zip_of_all_docx(generated: list[tuple[str, str]], org: dict) -> bytes
             docx_bytes = export_clause_to_word(
                 cid, content, org_name=org.get("name", ""),
                 prepared_by=pb, reviewed_by=rvb, approved_by=apb,
+                template_path=template_path,
             )
             safe_name = name.replace(" ", "_").replace("/", "_")
             zf.writestr(f"{cid}_{safe_name}.docx", docx_bytes)
@@ -41,7 +44,7 @@ def _build_zip_of_all_docx(generated: list[tuple[str, str]], org: dict) -> bytes
 
 def render() -> None:
     generated = [
-        (cid, name) for cid, name in get_active_clauses().items()
+        (cid, name) for cid, name in CLAUSE_NAMES.items()
         if (OUTPUTS_DIR / f"{cid}.md").exists()
     ]
 
@@ -49,6 +52,8 @@ def render() -> None:
     cfg = load_config()
     gh_cfg = cfg.get("github", {})
     has_github = bool(gh_cfg.get("token") and gh_cfg.get("repo"))
+    _tpl_rel = cfg.get("export", {}).get("word_template_path", "")
+    template_path = str(BASE_DIR / _tpl_rel) if _tpl_rel else ""
 
     gh_action = f'<a href="?page=org" target="_self" class="btn">{icon("git",14)} Upload to GitHub</a>' if has_github else ""
     page_head(
@@ -76,7 +81,7 @@ def render() -> None:
             f'</div></div></div>',
             unsafe_allow_html=True,
         )
-        zip_bytes = _build_zip_of_all_docx(generated, org)
+        zip_bytes = _build_zip_of_all_docx(generated, org, template_path=template_path)
         st.download_button(
             "⬇ Download all (.zip)",
             data=zip_bytes,
@@ -141,7 +146,12 @@ def render() -> None:
         help="Type a clause number (5.2) or part of a document title to filter the list.",
     )
 
-    st.markdown('<h3 style="margin-top:24px;margin-bottom:12px;">All documents</h3>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="card"><div class="card-head">'
+        '<h3 class="card-title">All documents</h3></div>'
+        '<div class="card-body">',
+        unsafe_allow_html=True,
+    )
 
     # Header row — column ratios match per-row buttons below for alignment
     col_widths = [1, 5, 2, 2, 2]
@@ -151,7 +161,6 @@ def render() -> None:
     h[2].markdown('<div class="muted" style="font-size:11px;font-weight:600">STATUS</div>', unsafe_allow_html=True)
     h[3].markdown('<div class="muted" style="font-size:11px;font-weight:600">MODIFIED</div>', unsafe_allow_html=True)
     h[4].markdown('<div class="muted" style="font-size:11px;font-weight:600;text-align:right">EXPORT</div>', unsafe_allow_html=True)
-    st.markdown('<div style="border-bottom:1px solid var(--border-2);margin:2px 0 6px 0"></div>', unsafe_allow_html=True)
 
     pb, rvb, apb = _get_personnel_for_doc(org)
     for cid, name in generated:
@@ -162,6 +171,7 @@ def render() -> None:
         f       = OUTPUTS_DIR / f"{cid}.md"
         mod_str = datetime.fromtimestamp(f.stat().st_mtime).strftime("%d %b, %H:%M") if f.exists() else "—"
 
+        st.markdown('<div class="docrow">', unsafe_allow_html=True)
         r = st.columns(col_widths)
         r[0].markdown(f'<div class="mono" style="font-size:12.5px;color:var(--ink-2)">{cid}</div>',
                       unsafe_allow_html=True)
@@ -172,18 +182,49 @@ def render() -> None:
                       unsafe_allow_html=True)
         with r[4]:
             if content:
-                st.download_button(
-                    "⬇ .docx",
-                    data=export_clause_to_word(
-                        cid, content, org_name=org.get("name", ""),
-                        prepared_by=pb, reviewed_by=rvb, approved_by=apb,
-                    ),
-                    file_name=f"{cid}_{name.replace(' ', '_')}.docx",
-                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    key=f"dl_{cid}",
-                    use_container_width=True,
-                    help=f"Download {cid} as a Word document.",
-                )
+                if cid in EXCEL_EXPORT_CLAUSES:
+                    bc1, bc2 = st.columns(2)
+                    with bc1:
+                        st.download_button(
+                            "⬇ .docx",
+                            data=export_clause_to_word(
+                                cid, content, org_name=org.get("name", ""),
+                                prepared_by=pb, reviewed_by=rvb, approved_by=apb,
+                                template_path=template_path,
+                            ),
+                            file_name=f"{cid}_{name.replace(' ', '_')}.docx",
+                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                            key=f"dl_{cid}",
+                            use_container_width=True,
+                            help=f"Download {cid} as a Word document.",
+                        )
+                    with bc2:
+                        st.download_button(
+                            "⬇ .xlsx",
+                            data=export_clause_to_excel(cid, content, org_name=org.get("name", "")),
+                            file_name=f"{cid}_{name.replace(' ', '_')}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            key=f"dl_xl_{cid}",
+                            use_container_width=True,
+                            help=f"Download {cid} tables as a styled Excel workbook.",
+                        )
+                else:
+                    st.download_button(
+                        "⬇ .docx",
+                        data=export_clause_to_word(
+                            cid, content, org_name=org.get("name", ""),
+                            prepared_by=pb, reviewed_by=rvb, approved_by=apb,
+                            template_path=template_path,
+                        ),
+                        file_name=f"{cid}_{name.replace(' ', '_')}.docx",
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        key=f"dl_{cid}",
+                        use_container_width=True,
+                        help=f"Download {cid} as a Word document.",
+                    )
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown('</div></div>', unsafe_allow_html=True)
 
     # ── Bulk GitHub upload ────────────────────────────────────────────────
     if has_github:

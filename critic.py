@@ -136,31 +136,30 @@ PERFORM THESE FIVE CHECKS:
 5. AUDIT READINESS — Would an experienced ISO 27001:2022 external auditor accept this document
    as conforming evidence during a Stage 2 certification audit?
 
-VERDICT RULES:
-- PASS — all mandatory requirements satisfied, document is audit-ready.
-- CONDITIONAL PASS — requirements substantially met but minor gaps need fixing.
-- FAIL — one or more mandatory requirements missing or the document could not serve as audit evidence.
-Base every finding on the actual text of the DOCUMENT UNDER REVIEW above. Quote or reference
-its real section numbers and content. Do not invent findings about sections that exist.
+VERDICT RULES — decide the Overall Assessment using exactly these rules:
+- FAIL — one or more of the five checks is FAIL (a mandatory "shall" requirement is missing,
+  or the document could not stand as audit evidence).
+- CONDITIONAL PASS — no check is FAIL, but one or more is WARN (the document is broadly
+  conformant but needs specific minor fixes before a Stage 2 audit).
+- PASS — all five checks are PASS (no mandatory gaps, audit-ready as written).
+Do NOT default to FAIL. Only choose FAIL when you can name the specific failed check above.
 
-OUTPUT FORMAT — respond in this exact structure. Every [bracketed] field is a placeholder:
-replace it with your own finding about THIS document. Never output brackets.
+OUTPUT FORMAT — respond in this exact structure. Replace every [bracketed placeholder] with
+your own finding; never output the brackets themselves:
 
 ## Critic Review — Clause {clause_id}: {clause_name}
 
-**Overall Assessment:** [PASS, CONDITIONAL PASS, or FAIL — per the verdict rules]
-**Confidence:** [HIGH, MEDIUM, or LOW]
+**Overall Assessment:** [PASS / CONDITIONAL PASS / FAIL]
+**Confidence:** [HIGH / MEDIUM / LOW]
 
 ### Findings Table
 | # | Check | Result | Detail |
 |---|-------|--------|--------|
-| 1 | ISO Mapping | [one word: PASS, FAIL, or WARN] | [one sentence: which clause {clause_id} requirements are or are not addressed] |
-| 2 | Completeness | [one word: PASS, FAIL, or WARN] | [one sentence: which sections of this document are substantive, vague, or missing] |
-| 3 | Org Specificity | [one word: PASS, FAIL, or WARN] | [one sentence: is the text specific to {org_name} or generic] |
-| 4 | Internal Consistency | [one word: PASS, FAIL, or WARN] | [one sentence: any contradictions found, or none] |
-| 5 | Audit Readiness | [one word: PASS, FAIL, or WARN] | [one sentence: would a Stage 2 auditor accept this document] |
-
-IMPORTANT: In the Result column write exactly one word — PASS, FAIL, or WARN. No brackets, no slashes, no other text.
+| 1 | ISO Mapping | [PASS/FAIL/WARN] | [specific detail] |
+| 2 | Completeness | [PASS/FAIL/WARN] | [specific detail] |
+| 3 | Org Specificity | [PASS/FAIL/WARN] | [specific detail] |
+| 4 | Internal Consistency | [PASS/FAIL/WARN] | [specific detail] |
+| 5 | Audit Readiness | [PASS/FAIL/WARN] | [specific detail] |
 
 ### Required Revisions
 {revision_instructions}
@@ -200,9 +199,7 @@ def call_ollama(base_url, model, prompt, temperature=0.1, timeout=600):
         "stream": False,
         "options": {
             "temperature": temperature,
-            "num_predict": 1200,
-            # 6144 (was 4096): the reviewed document cap rose 3000→5000 chars;
-            # 4096 risked silent head-truncation of the audit instructions.
+            "num_predict": 1000,
             "num_ctx": 6144,
         },
     }
@@ -269,14 +266,18 @@ def parse_overall_assessment(critic_output):
     """Extract the overall assessment from critic markdown output."""
     for line in critic_output.splitlines():
         if "**Overall Assessment:**" in line:
+            # Model echoed the literal placeholder instead of deciding — surface as a
+            # visible UNKNOWN rather than silently scoring FAIL on the bracketed example.
             if "[" in line:
-                # Unfilled placeholder echoed back — not a real verdict.
                 return "UNKNOWN"
-            if "CONDITIONAL" in line.upper():
+            upper = line.upper()
+            # CONDITIONAL must be checked before FAIL: "CONDITIONAL PASS" contains neither
+            # but a careless FAIL-first check would mis-route a line mentioning both words.
+            if "CONDITIONAL" in upper:
                 return "CONDITIONAL PASS"
-            elif "FAIL" in line.upper():
+            elif "FAIL" in upper:
                 return "FAIL"
-            elif "PASS" in line.upper():
+            elif "PASS" in upper:
                 return "PASS"
     return "UNKNOWN"
 
@@ -320,7 +321,7 @@ def run_critic(clause_id, cfg, org, force=False):
         org_size=org.get("size", ""),
         org_scope=org.get("scope", ""),
         legal_basis=", ".join(org.get("legal_basis", [])),
-        document=document[:5000],  # cap to fit num_ctx 6144 — covers most full drafts (4.1 is 8.5 KB, still partial)
+        document=document[:5000],  # cap to avoid context overflow on small models
         revision_instructions=REVISION_INSTRUCTIONS_TEMPLATE,
     )
 
