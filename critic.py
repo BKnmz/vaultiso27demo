@@ -324,7 +324,11 @@ def get_rag_context_for_critic(clause_id, cfg):
 
 
 def parse_overall_assessment(critic_output):
-    """Extract the overall assessment from critic markdown output."""
+    """Extract the overall assessment from critic markdown output.
+
+    Legacy-format shim: only used as a fallback when reading a cached .critic.md
+    written before the pydantic-ai migration (no .critic.json sidecar present).
+    """
     for line in critic_output.splitlines():
         if "**Overall Assessment:**" in line:
             # Model echoed the literal placeholder instead of deciding — surface as a
@@ -350,12 +354,13 @@ def parse_overall_assessment(critic_output):
 def run_critic(clause_id, cfg, org, force=False):
     """
     Run adversarial critic on a generated clause document.
-    Saves result to outputs/<clause_id>.critic.md
+    Saves result to outputs/<clause_id>.critic.md and outputs/<clause_id>.critic.json
     Returns (assessment, critic_text) or (None, None) if skipped.
     """
     outputs_dir = Path(cfg["paths"]["outputs"])
     doc_file = outputs_dir / f"{clause_id}.md"
     critic_file = outputs_dir / f"{clause_id}.critic.md"
+    critic_json_file = outputs_dir / f"{clause_id}.critic.json"
 
     if not doc_file.exists():
         log.warning("[SKIP] No generated document found for clause %s", clause_id)
@@ -363,9 +368,16 @@ def run_critic(clause_id, cfg, org, force=False):
 
     if not force and critic_file.exists():
         log.info("[CACHED] Critic review already exists for %s", clause_id)
-        return parse_overall_assessment(
-            critic_file.read_text(encoding="utf-8")
-        ), critic_file.read_text(encoding="utf-8")
+        cached_md = critic_file.read_text(encoding="utf-8")
+        if critic_json_file.exists():
+            try:
+                cached_verdict = ReviewVerdict.model_validate_json(
+                    critic_json_file.read_text(encoding="utf-8")
+                )
+                return cached_verdict.overall_assessment, cached_md
+            except Exception:
+                pass  # fall through to legacy markdown parse
+        return parse_overall_assessment(cached_md), cached_md
 
     document = doc_file.read_text(encoding="utf-8", errors="replace")
     clause_name = CLAUSE_NAMES.get(clause_id, clause_id)
@@ -391,11 +403,16 @@ def run_critic(clause_id, cfg, org, force=False):
     ollama_timeout = cfg.get("timeouts", {}).get("ollama_generate", 600)
 
     log.info("[CRITIC] %s — %s", clause_id, clause_name)
-    result = call_ollama(cfg["llm"]["base_url"], critic_model, prompt, critic_temp, timeout=ollama_timeout)
-    assessment = parse_overall_assessment(result)
+    verdict = run_reviewer_agent(cfg["llm"]["base_url"], critic_model, prompt, critic_temp, timeout=ollama_timeout)
+    # Overwrite clause identity from known values rather than trusting the model's echo —
+    # same anti-hallucination principle used elsewhere in this codebase.
+    verdict = verdict.model_copy(update={"clause_id": clause_id, "clause_name": clause_name})
+    assessment = verdict.overall_assessment
+    result = verdict_to_markdown(verdict)
     log.info("[CRITIC RESULT] %s → %s", clause_id, assessment)
 
     critic_file.write_text(result, encoding="utf-8")
+    critic_json_file.write_text(verdict.model_dump_json(indent=2), encoding="utf-8")
     return assessment, result
 
 

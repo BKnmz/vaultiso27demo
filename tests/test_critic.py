@@ -165,6 +165,9 @@ class TestRunCriticCacheHit(unittest.TestCase):
 
             (outputs_dir / f"{clause_id}.md").write_text("Draft document content", encoding="utf-8")
             (outputs_dir / f"{clause_id}.critic.md").write_text(PASS_OUTPUT, encoding="utf-8")
+            (outputs_dir / f"{clause_id}.critic.json").write_text(
+                _verdict("PASS").model_dump_json(), encoding="utf-8"
+            )
 
             cfg = {
                 "llm": {"base_url": "http://localhost:11434"},
@@ -173,9 +176,30 @@ class TestRunCriticCacheHit(unittest.TestCase):
                 "critic": {"model": "qwen2.5:1.5b", "temperature": 0.1},
             }
 
-            with patch("critic.call_ollama") as mock_ollama:
+            with patch("critic.run_reviewer_agent") as mock_agent:
                 assessment, text = critic.run_critic(clause_id, cfg, SAMPLE_ORG, force=False)
-                mock_ollama.assert_not_called()
+                mock_agent.assert_not_called()
+                self.assertEqual(assessment, "PASS")
+
+    def test_cached_critic_falls_back_to_markdown_parse_without_json_sidecar(self):
+        # Legacy cache from before the pydantic-ai migration — no .critic.json sidecar yet.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            outputs_dir = Path(tmpdir)
+            clause_id = "4.3"
+
+            (outputs_dir / f"{clause_id}.md").write_text("Draft document content", encoding="utf-8")
+            (outputs_dir / f"{clause_id}.critic.md").write_text(PASS_OUTPUT, encoding="utf-8")
+
+            cfg = {
+                "llm": {"base_url": "http://localhost:11434"},
+                "rag": {"chroma_db_path": "rag/chroma_db", "collection_name": "iso27001"},
+                "paths": {"outputs": str(outputs_dir)},
+                "critic": {"model": "qwen2.5:1.5b", "temperature": 0.1},
+            }
+
+            with patch("critic.run_reviewer_agent") as mock_agent:
+                assessment, text = critic.run_critic(clause_id, cfg, SAMPLE_ORG, force=False)
+                mock_agent.assert_not_called()
                 self.assertEqual(assessment, "PASS")
 
     def test_force_bypasses_cache(self):
@@ -193,16 +217,15 @@ class TestRunCriticCacheHit(unittest.TestCase):
                 "critic": {"model": "qwen2.5:1.5b", "temperature": 0.1},
             }
 
-            new_review = CONDITIONAL_OUTPUT
-            with patch("critic.call_ollama", return_value=new_review) as mock_ollama:
+            new_verdict = _verdict("CONDITIONAL PASS")
+            with patch("critic.run_reviewer_agent", return_value=new_verdict) as mock_agent:
                 with patch("critic.get_rag_context_for_critic", return_value="RAG context"):
                     assessment, text = critic.run_critic(clause_id, cfg, SAMPLE_ORG, force=True)
-                    mock_ollama.assert_called_once()
+                    mock_agent.assert_called_once()
                     self.assertEqual(assessment, "CONDITIONAL PASS")
-                    self.assertEqual(
-                        (outputs_dir / f"{clause_id}.critic.md").read_text(),
-                        new_review,
-                    )
+                    self.assertIn("CONDITIONAL PASS", (outputs_dir / f"{clause_id}.critic.md").read_text())
+                    saved_json = json.loads((outputs_dir / f"{clause_id}.critic.json").read_text())
+                    self.assertEqual(saved_json["overall_assessment"], "CONDITIONAL PASS")
 
 
 class TestRunCriticNoDocument(unittest.TestCase):
