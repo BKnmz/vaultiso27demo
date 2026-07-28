@@ -14,6 +14,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import requests
 import yaml
 
 BASE_DIR = Path(__file__).parent
@@ -158,6 +159,27 @@ def _build_legacy_factory_models():
         tags.add(entry["gen_model"])
         tags.add(entry["reviewer_model"])
     return tags
+
+
+def refresh_catalog_best_effort():
+    """Opt-in, manual-only (CLI --refresh-catalog), never called from install's
+    default path. Best-effort GET to a public Ollama model index; on ANY failure
+    (offline, timeout, malformed response, unexpected schema) this is a silent
+    no-op — never raises, never touches the bundled models_catalog.json. On
+    success, writes an informational cache file only; does not alter TIERS
+    or LEGACY_FACTORY_MODELS for the current process."""
+    try:
+        resp = requests.get("https://ollamadb.dev/api/v1/models", timeout=5)
+        if resp.status_code != 200:
+            return
+        data = resp.json()
+        if not isinstance(data, dict) or "models" not in data:
+            return
+        _ONLINE_CACHE_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        print(f"  [OK] Online model index cached to {_ONLINE_CACHE_PATH.name} "
+              "(informational only — config.yaml is unaffected).")
+    except Exception:
+        pass  # advisory only — never block or fail install on this
 
 
 TIERS = _build_tiers()
@@ -445,10 +467,17 @@ if __name__ == "__main__":
         "--detect", action="store_true",
         help="Print full hardware diagnostics (RAM, per-GPU VRAM list, tier) without writing config.yaml.",
     )
+    parser.add_argument(
+        "--refresh-catalog", action="store_true",
+        help="Best-effort check for newer model tags against a public index. Never touches "
+             "models_catalog.json or config.yaml; writes an informational cache file only.",
+    )
     args = parser.parse_args()
     if args.print_models:
         print_models()
     elif args.detect:
         detect_main()
+    elif args.refresh_catalog:
+        refresh_catalog_best_effort()
     else:
         main()

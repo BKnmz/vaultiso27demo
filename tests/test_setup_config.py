@@ -215,5 +215,46 @@ class TestModelsCatalogFile(unittest.TestCase):
         self.assertEqual(setup_config.LEGACY_FACTORY_MODELS, expected)
 
 
+class TestRefreshCatalogBestEffort(unittest.TestCase):
+    """refresh_catalog_best_effort() is opt-in, never called from main()'s install
+    path, and must never raise or touch the bundled models_catalog.json — only
+    ever writes a separate online-cache file on success."""
+
+    def test_network_failure_never_raises(self):
+        with patch("setup_config.requests.get", side_effect=Exception("offline")):
+            try:
+                setup_config.refresh_catalog_best_effort()
+            except Exception as e:
+                self.fail(f"refresh_catalog_best_effort() raised on network failure: {e}")
+
+    def test_network_failure_does_not_touch_bundled_catalog(self):
+        original = setup_config._CATALOG_PATH.read_text(encoding="utf-8")
+        with patch("setup_config.requests.get", side_effect=Exception("offline")):
+            setup_config.refresh_catalog_best_effort()
+        self.assertEqual(setup_config._CATALOG_PATH.read_text(encoding="utf-8"), original)
+
+    def test_malformed_response_never_raises(self):
+        mock_resp = MagicMock()
+        mock_resp.json.side_effect = ValueError("not json")
+        with patch("setup_config.requests.get", return_value=mock_resp):
+            try:
+                setup_config.refresh_catalog_best_effort()
+            except Exception as e:
+                self.fail(f"refresh_catalog_best_effort() raised on malformed response: {e}")
+
+    def test_success_writes_separate_cache_file_not_bundled(self):
+        original_bundled = setup_config._CATALOG_PATH.read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_path = Path(tmpdir) / "models_catalog.online_cache.json"
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.json.return_value = {"models": [{"name": "some-new-model:1b"}]}
+            with patch("setup_config.requests.get", return_value=mock_resp), \
+                 patch("setup_config._ONLINE_CACHE_PATH", cache_path):
+                setup_config.refresh_catalog_best_effort()
+            self.assertTrue(cache_path.exists())
+        self.assertEqual(setup_config._CATALOG_PATH.read_text(encoding="utf-8"), original_bundled)
+
+
 if __name__ == "__main__":
     unittest.main()
