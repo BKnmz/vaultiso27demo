@@ -64,5 +64,29 @@ class TestExtractOrgWithLlm(unittest.TestCase):
         mock_error.assert_called_once()
 
 
+class TestExtractPersonnelAgentCall(unittest.TestCase):
+    def test_returns_list_of_personnel_entries(self):
+        canned = [PersonnelEntry(role="CEO", name="Jane Doe")]
+        with patch("core.Agent") as mock_agent_cls, patch("core.OpenAIProvider"):
+            mock_agent_cls.return_value.run_sync.return_value.output = canned
+            result = core._extract_personnel_agent_call("some org chart text", CFG)
+        self.assertEqual(result, canned)
+
+
+class TestExtractPersonnelWithLlm(unittest.TestCase):
+    def test_success_returns_plain_dicts(self):
+        canned = [PersonnelEntry(role="CEO", name="Jane Doe"), PersonnelEntry(role="CISO", name="John Smith")]
+        with patch("core._extract_personnel_agent_call", return_value=canned):
+            result = core.extract_personnel_with_llm("doc text", CFG)
+        self.assertEqual(result, [{"role": "CEO", "name": "Jane Doe"}, {"role": "CISO", "name": "John Smith"}])
+
+    def test_failure_shows_error_and_returns_none(self):
+        with patch("core._extract_personnel_agent_call", side_effect=RuntimeError("boom")), \
+             patch("core.st.error") as mock_error:
+            result = core.extract_personnel_with_llm("doc text", CFG)
+        self.assertIsNone(result)
+        mock_error.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

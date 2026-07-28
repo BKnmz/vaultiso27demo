@@ -1040,40 +1040,31 @@ def extract_org_with_llm(text, cfg):
         return None
 
 
-def extract_personnel_with_llm(text, cfg):
-    """Extract key personnel names and roles from an org chart or document."""
+def _extract_personnel_agent_call(text, cfg) -> list[PersonnelEntry]:
+    """Pure agent call, no Streamlit — testable in isolation."""
     prompt = f"""You are an ISO 27001 consultant. Extract key personnel information from the document below.
-
-Return ONLY a valid JSON array — no explanation, no markdown fences:
-[
-  {{"role": "CEO", "name": "Full Name"}},
-  {{"role": "CISO", "name": "Full Name"}}
-]
 
 Rules:
 - Include only named individuals with clear roles
 - Roles should map to information security governance (CEO, CISO, IT Manager, Risk Owner, DPO, etc.)
-- Return an empty array [] if no clear personnel found
+- Return an empty list if no clear personnel found
 - Do NOT invent names
+- Keep role and name in separate fields — never combine them into one string
 
 DOCUMENT:
-{text[:3000]}
+{text[:3000]}"""
+    agent = _build_extraction_agent(cfg, list[PersonnelEntry], num_predict=300, timeout=120)
+    return agent.run_sync(prompt).output
 
-JSON:"""
+
+def extract_personnel_with_llm(text, cfg):
+    """Extract key personnel names and roles from an org chart or document."""
     try:
-        resp = requests.post(
-            f"{cfg['llm']['base_url']}/api/generate",
-            json={"model": cfg["llm"]["model"], "prompt": prompt, "stream": False,
-                  "options": {"temperature": 0.05, "num_predict": 300}},
-            timeout=120,
-        )
-        raw = resp.json().get("response", "").strip()
-        start, end = raw.find("["), raw.rfind("]") + 1
-        if start >= 0 and end > start:
-            return json.loads(raw[start:end])
+        entries = _extract_personnel_agent_call(text, cfg)
+        return [e.model_dump() for e in entries]
     except Exception as e:
         st.error(f"Personnel extraction error: {e}")
-    return None
+        return None
 
 
 # ---------------------------------------------------------------------------
