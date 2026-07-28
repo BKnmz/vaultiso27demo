@@ -48,7 +48,12 @@ verified these phases sequentially.
 **New files** (copied from main tool, path-identical):
 - `schemas/__init__.py`
 - `schemas/review.py` — `ReviewVerdict` / `FindingRow` (Literal-typed verdict, exactly 5
-  findings enforced)
+  findings enforced). **Verified exact shape (fact-check, 2026-07-27):**
+  `FindingRow` = {dimension: Literal[5 dimension names], result: Literal["PASS","WARN","FAIL"],
+  detail: str}. `ReviewVerdict` = {clause_id, clause_name, overall_assessment:
+  Literal["PASS","CONDITIONAL PASS","FAIL"], confidence: Literal["HIGH","MEDIUM","LOW"],
+  findings: list[FindingRow] (min_length=5, max_length=5), required_revisions,
+  auditor_verdict}. Port verbatim — no field drift vs demo's needs.
 - `adapters/__init__.py`
 - `adapters/review_markdown.py` — `verdict_to_markdown()`, byte-compatible with the
   existing `.critic.md` shape so `pipeline.py:extract_critic_findings()` and the Review tab
@@ -72,10 +77,22 @@ verified these phases sequentially.
 - `requirements.txt` — pin `pydantic-ai-slim[openai]==2.9.0` exact (slim + openai extra
   only — no anthropic/google provider deps as a side effect).
 
-**Offline/no-cloud invariant:** agent's `base_url` must always resolve to
-`cfg["llm"]["base_url"]` via Ollama's OpenAI-compatible surface
-(`http://localhost:11434/v1`). Port the main tool's test asserting `api.openai.com` never
-appears in any request.
+**Offline/no-cloud invariant (hardened after security review):**
+- `config.yaml`'s `llm.base_url` is a bare host (`http://localhost:11434`, used today with
+  `/api/generate`). The agent construction must explicitly build
+  `f"{base_url.rstrip('/')}/v1"` in one place — do not rely on the SDK to guess it.
+- **Fail loud, not silent:** if `base_url` is falsy/empty at agent-construction time, raise
+  immediately. Never let the OpenAI SDK fall through to its default
+  (`https://api.openai.com`) on a missing/malformed base_url.
+- **Hardcode `api_key="ollama"`** (the standard pydantic-ai+Ollama dummy-key pattern) —
+  never let the OpenAI SDK inherit `OPENAI_API_KEY` from the environment. This matters
+  because a dev machine may have a real key set for an unrelated project; if base_url is
+  ever wrong at the same time, that combination silently sends a real, billed cloud
+  request. Hardcoding removes that failure mode entirely regardless of environment state.
+- Port the main tool's test asserting `api.openai.com` never appears in any request, and
+  add two more: a startup-time hard-fail test for empty `base_url`, and a test confirming
+  `api_key` is never read from environment (assert the constructed client's key is always
+  the literal `"ollama"` string, independent of `OPENAI_API_KEY` being set or unset).
 
 ### Phase 2 — Org/personnel extraction → pydantic-ai
 
@@ -83,11 +100,16 @@ appears in any request.
 - `schemas/org_profile.py` — `OrgProfile` / `PersonnelEntry` / `AssetEntry` /
   `StakeholderEntry`, field-drift-guarded 1:1 against demo's existing `ORG_JSON_SCHEMA`
   dict in `ui/core.py` (kept — still used for Settings → Organization Profile form
-  rendering, not deletable). **Must verify demo's current `ORG_JSON_SCHEMA` fields match
-  main tool's pre-migration schema before assuming the ported Pydantic model is correct** —
-  demo's schema was last touched independently of the main tool's Session-14 field
-  additions (`departments`, `regulatory_drivers`) and needs a direct read-and-compare, not
-  an assumption.
+  rendering, not deletable).
+
+  **Verified by fact-check agent (2026-07-27) — demo's `ORG_JSON_SCHEMA` at
+  `ui/core.py:961-969` has 15 fields, exact match to main tool's `OrgProfile`:**
+  scalars `name`, `industry`, `size`, `scope`; arrays `primary_processes`, `locations`,
+  `departments`, `regulatory_drivers`, `legal_basis`, `critical_suppliers`,
+  `existing_controls`, `certifications_existing`; nested lists `stakeholders`
+  ({name, expectation} → `StakeholderEntry`), `assets` ({name, system, owner,
+  classification} → `AssetEntry`), `key_personnel` ({role, name} → `PersonnelEntry`).
+  No field-drift — port `schemas/org_profile.py` as-is, no adaptation needed.
 
 **Modified files:**
 - `ui/core.py` — `extract_org_with_llm()` / `extract_personnel_with_llm()` split into pure
@@ -110,9 +132,23 @@ appears in any request.
   identity), merged into `TIERS` at import time so every downstream reader (organization
   tab's runtime tier lookup, existing tests) sees the identical dict shape as before.
   `LEGACY_FACTORY_MODELS` derived from the catalog's `legacy_tags` array instead of a
-  hardcoded Python set. **Must be re-derived against demo's current (post-`a3bb1eb`,
-  ~438-line) `setup_config.py`, not main tool's pre-Phase-4 version** — the two have
-  already diverged.
+  hardcoded Python set.
+
+  **Verified against demo's actual current file (fact-check, 2026-07-27):** demo's
+  `setup_config.py` is exactly 438 lines; lines 29-136 hold one hardcoded `TIERS` list
+  covering all 5 tiers, each entry with 14 fields — `name`, `label`, `min_ram_gb`,
+  `min_vram_gb`, `ollama_timeout`, `model_swap_delay`, `gen_model`, `reviewer_model`,
+  `num_gpu`, `why`, `speed`, `num_predict`, `length_profile`, `item_counts`. The split must
+  partition these 14 into: catalog-sourced (`gen_model`, `reviewer_model`, `label`, `why`,
+  `speed` — matches main tool's `models_catalog.json` shape exactly) vs.
+  `_TIER_TUNING`-retained (`min_ram_gb`, `min_vram_gb`, `ollama_timeout`,
+  `model_swap_delay`, `num_gpu`, `num_predict`, `length_profile`, `item_counts`). No
+  catalog-merge structure exists yet in demo — this is a from-scratch split of a currently
+  fully-hardcoded file, not an adaptation of an already-partial one.
+
+  Main tool's `models_catalog.json` (verified, 50 lines) structure to replicate:
+  `{"catalog_version": "2026.07", "tiers": {<5 tier keys>: {gen_model, reviewer_model,
+  label, why, speed}}, "legacy_tags": [7 model strings]}`.
 - `refresh_catalog_best_effort()` — manual opt-in only (`setup_config.py
   --refresh-catalog`), never auto-invoked from `install.bat` or `main()`. Fails silently
   and safely on any error (unofficial third-party model-index API, not load-bearing).
