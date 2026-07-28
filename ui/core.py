@@ -380,6 +380,20 @@ def get_review_text(cid):
     f = OUTPUTS_DIR / f"{cid}.critic.md"
     return f.read_text(encoding="utf-8", errors="replace") if f.exists() else None
 
+def get_review_verdict(cid):
+    """Typed AI Reviewer result, if available (written alongside .critic.md since the
+    pydantic-ai migration). Returns None for clauses not yet reviewed or reviewed
+    before the migration (no .critic.json sidecar) — callers should fall back to
+    get_review_text() + regex-free display in that case."""
+    from schemas.review import ReviewVerdict
+    f = OUTPUTS_DIR / f"{cid}.critic.json"
+    if not f.exists():
+        return None
+    try:
+        return ReviewVerdict.model_validate_json(f.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
 def read_output(cid):
     f = OUTPUTS_DIR / f"{cid}.md"
     return f.read_text(encoding="utf-8", errors="replace") if f.exists() else None

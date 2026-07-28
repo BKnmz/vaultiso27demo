@@ -14,6 +14,7 @@ from core import (
     CLAUSE_NAMES, STATUS_KIND, REVIEW_RESULT, OUTPUTS_DIR, BASE_DIR,
     EXCEL_EXPORT_CLAUSES,
     get_clause_status, save_status, get_review_assessment, get_review_text,
+    get_review_verdict,
     read_output, load_org, load_config, run_reviewer_subprocess,
     export_clause_to_word, export_clause_to_excel, _get_personnel_for_doc,
 )
@@ -80,23 +81,39 @@ def _parse_required_revisions(rev_text: str) -> list[str]:
     return items
 
 
-def _render_reviewer_findings(rev_text: str) -> str:
-    """Convert reviewer markdown into a styled task list with PASS/FAIL pills."""
-    findings = _parse_findings_table(rev_text)
-    revisions = _parse_required_revisions(rev_text)
+def _render_reviewer_findings(verdict_obj, rev_text: str) -> str:
+    """Convert AI Reviewer output into a styled task list with PASS/FAIL pills.
 
-    # Detect verdict to decide whether to surface revisions callout
-    verdict = ""
-    for ln in rev_text.splitlines():
-        if "**Overall Assessment:**" in ln:
-            up = ln.upper()
-            if "FAIL" in up:
-                verdict = "FAIL"
-            elif "CONDITIONAL" in up:
-                verdict = "CONDITIONAL"
-            elif "PASS" in up:
-                verdict = "PASS"
-            break
+    Prefers a typed ReviewVerdict (post pydantic-ai migration — structurally
+    guaranteed, no parsing needed). Falls back to regex-parsing rev_text's markdown
+    for .critic.md files generated before the migration (no .critic.json sidecar,
+    so verdict_obj is None)."""
+    if verdict_obj is not None:
+        findings = [
+            {"dimension": f.dimension, "status": f.result, "finding": f.detail}
+            for f in verdict_obj.findings
+        ]
+        revisions = list(verdict_obj.required_revisions)
+        if verdict_obj.overall_assessment == "FAIL":
+            verdict = "FAIL"
+        elif verdict_obj.overall_assessment == "CONDITIONAL PASS":
+            verdict = "CONDITIONAL"
+        else:
+            verdict = "PASS"
+    else:
+        findings = _parse_findings_table(rev_text) if rev_text else []
+        revisions = _parse_required_revisions(rev_text) if rev_text else []
+        verdict = ""
+        for ln in (rev_text or "").splitlines():
+            if "**Overall Assessment:**" in ln:
+                up = ln.upper()
+                if "FAIL" in up:
+                    verdict = "FAIL"
+                elif "CONDITIONAL" in up:
+                    verdict = "CONDITIONAL"
+                elif "PASS" in up:
+                    verdict = "PASS"
+                break
 
     out: list[str] = []
 
@@ -260,7 +277,7 @@ def render() -> None:
         )
 
         # AI Reviewer findings (full-width card)
-        findings_html = _render_reviewer_findings(rev_text) if rev_text else ""
+        findings_html = _render_reviewer_findings(get_review_verdict(selected), rev_text) if rev_text else ""
         st.markdown(
             f'<div class="card" style="margin-bottom:8px">'
             f'<div class="card-head">'
