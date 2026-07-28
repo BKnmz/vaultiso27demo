@@ -3,9 +3,12 @@ Tests for setup_config.py — tier selection (VRAM-fit-first OR logic) and
 the LEGACY_FACTORY_MODELS migration set. No hardware probing, no LLM calls.
 """
 
+import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -168,6 +171,48 @@ class TestItemCountsStructure(unittest.TestCase):
                 setup_config.CONFIG_PATH = orig_path
         finally:
             shutil.rmtree(tmpdir)
+
+
+class TestModelsCatalogFile(unittest.TestCase):
+    """The bundled models_catalog.json is the source of truth for gen_model/
+    reviewer_model/label/why/speed — TIERS merges it at import time with the
+    Python-side hardware-tuning fields (min_ram_gb, min_vram_gb, timeouts, etc.)."""
+
+    def test_bundled_catalog_has_all_five_tiers(self):
+        catalog = setup_config.load_models_catalog()
+        self.assertEqual(
+            set(catalog["tiers"].keys()),
+            {"high", "mid", "cpu_rich", "low", "minimal"},
+        )
+
+    def test_bundled_catalog_tier_entries_have_required_keys(self):
+        catalog = setup_config.load_models_catalog()
+        required = {"gen_model", "reviewer_model", "label", "why", "speed"}
+        for name, entry in catalog["tiers"].items():
+            missing = required - set(entry.keys())
+            self.assertEqual(missing, set(), f"catalog tier '{name}' missing keys: {missing}")
+
+    def test_bundled_catalog_has_legacy_tags(self):
+        catalog = setup_config.load_models_catalog()
+        self.assertIn("legacy_tags", catalog)
+        self.assertIn("gemma4:e2b-it-qat", catalog["legacy_tags"])
+
+    def test_tiers_merged_from_catalog_keep_full_shape(self):
+        # Every tier dict must still carry both the catalog fields AND the
+        # Python-side tuning fields — same contract downstream code relies on.
+        for tier in setup_config.TIERS:
+            for key in ("gen_model", "reviewer_model", "label", "why", "speed",
+                        "min_ram_gb", "min_vram_gb", "ollama_timeout",
+                        "model_swap_delay", "num_predict", "item_counts"):
+                self.assertIn(key, tier, f"tier '{tier.get('name')}' missing '{key}' after merge")
+
+    def test_legacy_factory_models_derived_from_catalog(self):
+        catalog = setup_config.load_models_catalog()
+        expected = set(catalog["legacy_tags"])
+        for tier in catalog["tiers"].values():
+            expected.add(tier["gen_model"])
+            expected.add(tier["reviewer_model"])
+        self.assertEqual(setup_config.LEGACY_FACTORY_MODELS, expected)
 
 
 if __name__ == "__main__":
