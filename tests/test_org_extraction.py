@@ -29,6 +29,15 @@ class TestExtractOrgAgentCall(unittest.TestCase):
         self.assertEqual(result, canned)
 
 
+class TestExtractionAgentNoCloudApi(unittest.TestCase):
+    def test_empty_base_url_raises_before_any_network_call(self):
+        with patch("core.Agent") as mock_agent_cls, patch("core.OpenAIProvider") as mock_provider:
+            with self.assertRaises(ValueError):
+                core._extract_org_agent_call("some text", {"llm": {"base_url": "", "model": "x"}})
+        mock_provider.assert_not_called()
+        mock_agent_cls.assert_not_called()
+
+
 class TestExtractOrgWithLlm(unittest.TestCase):
     def test_success_returns_plain_dict_not_pydantic_model(self):
         canned = OrgProfile(name="Acme Corp", locations=["Berlin"])

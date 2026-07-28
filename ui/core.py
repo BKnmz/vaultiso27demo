@@ -991,6 +991,11 @@ ORG_JSON_SCHEMA = {
 
 
 def _build_extraction_agent(cfg, output_type, num_predict, timeout):
+    if not cfg["llm"]["base_url"]:
+        raise ValueError(
+            "_build_extraction_agent: base_url is empty — refusing to let the OpenAI SDK "
+            "fall back to its default (https://api.openai.com)."
+        )
     provider = OpenAIProvider(base_url=f"{cfg['llm']['base_url']}/v1", api_key="ollama")
     model = OpenAIChatModel(
         cfg["llm"]["model"],
