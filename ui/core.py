@@ -17,6 +17,13 @@ import requests
 import streamlit as st
 import yaml
 
+from pydantic_ai import Agent, NativeOutput
+from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.providers.openai import OpenAIProvider
+from pydantic_ai.settings import ModelSettings
+
+from schemas.org_profile import OrgProfile, PersonnelEntry
+
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
@@ -983,13 +990,19 @@ ORG_JSON_SCHEMA = {
 }
 
 
-def extract_org_with_llm(text, cfg):
-    schema_str = json.dumps(ORG_JSON_SCHEMA, indent=2)
+def _build_extraction_agent(cfg, output_type, num_predict, timeout):
+    provider = OpenAIProvider(base_url=f"{cfg['llm']['base_url']}/v1", api_key="ollama")
+    model = OpenAIChatModel(
+        cfg["llm"]["model"],
+        provider=provider,
+        settings=ModelSettings(temperature=0.05, max_tokens=num_predict, timeout=timeout),
+    )
+    return Agent(model, output_type=NativeOutput(output_type))
+
+
+def _extract_org_agent_call(text, cfg) -> OrgProfile:
+    """Pure agent call, no Streamlit — testable in isolation."""
     prompt = f"""You are an ISO 27001 consultant. Extract organization information from the document below.
-
-Return ONLY a valid JSON object with this exact structure — no explanation, no markdown fences:
-
-{schema_str}
 
 Rules:
 - "scope": 1–2 sentences describing the core business and IT activities suitable for an ISMS scope statement
@@ -998,14 +1011,16 @@ Rules:
 - "regulatory_drivers": regulations or standards driving ISMS (e.g. ["GDPR", "NIS2", "TISAX"])
 - "legal_basis": include only regulations explicitly mentioned in the document — do NOT invent
 - "existing_controls": list specific security controls mentioned (MFA, VPN, firewalls, encryption, etc.)
-- Leave fields as empty string or empty array when not found in the document
+- Leave fields as empty string or empty list when not found in the document
 - Do NOT invent information
 
 DOCUMENT:
-{text[:5000]}
+{text[:5000]}"""
+    agent = _build_extraction_agent(cfg, OrgProfile, num_predict=1500, timeout=300)
+    return agent.run_sync(prompt).output
 
-JSON:"""
 
+def extract_org_with_llm(text, cfg):
     try:
         requests.get(f"{cfg['llm']['base_url']}/api/tags", timeout=5)
     except Exception:
@@ -1014,33 +1029,10 @@ JSON:"""
         return None
 
     try:
-        resp = requests.post(
-            f"{cfg['llm']['base_url']}/api/generate",
-            json={"model": cfg["llm"]["model"], "prompt": prompt, "stream": False,
-                  "options": {"temperature": 0.05, "num_predict": 1500}},
-            timeout=300,
-        )
-        raw = resp.json().get("response", "").strip()
-        start, end = raw.find("{"), raw.rfind("}") + 1
-        if start >= 0 and end > start:
-            return json.loads(raw[start:end])
-        st.error("The AI returned an unexpected response. "
-                 "Try uploading a shorter or plain-text (.txt) version of your document.")
-    except requests.exceptions.Timeout:
-        st.error(
-            "The AI engine is taking too long (3 minute limit reached). "
-            "This usually means the model is still loading into memory. "
-            "Wait 1–2 minutes, then try again — it will be faster on the second attempt."
-        )
-    except requests.exceptions.ConnectionError:
-        st.error("Cannot reach the AI engine. "
-                 "Go to Organization > AI Engine and check that Ollama is running.")
-    except json.JSONDecodeError:
-        st.error("Unexpected AI response format. "
-                 "Try uploading a shorter or simpler document (plain text works best).")
+        return _extract_org_agent_call(text, cfg).model_dump()
     except Exception as e:
         st.error(f"Extraction error: {e}")
-    return None
+        return None
 
 
 def extract_personnel_with_llm(text, cfg):
