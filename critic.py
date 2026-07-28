@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import sys
+import time
 from pathlib import Path
 
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
@@ -21,6 +22,15 @@ os.environ.setdefault("HF_DATASETS_OFFLINE", "1")
 
 import requests
 import yaml
+
+from pydantic_ai import Agent, NativeOutput
+from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
+from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.providers.openai import OpenAIProvider
+from pydantic_ai.settings import ModelSettings
+
+from adapters.review_markdown import verdict_to_markdown
+from schemas.review import ReviewVerdict
 
 if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -188,6 +198,57 @@ def load_config(path="config.yaml"):
 def load_org(path):
     with open(path, encoding="utf-8") as f:
         return json.load(f)
+
+
+def run_reviewer_agent(base_url, model, prompt, temperature=0.1, timeout=600):
+    """
+    Call the AI Reviewer via pydantic-ai, pointed at local Ollama's OpenAI-compatible
+    endpoint (never a real cloud API — base_url always resolves to config's llm.base_url).
+
+    Uses NativeOutput to force Ollama's grammar-constrained decoding (format=json_schema)
+    rather than pydantic-ai's default tool-calling structured-output mode — confirmed
+    empirically that qwen2.5:1.5b exhausts its output retries under tool-calling mode but
+    succeeds first-try under NativeOutput, since the schema constraint is enforced at the
+    token level regardless of the model's tool-calling reliability.
+
+    api_key is always the hardcoded literal "ollama" — never read from OPENAI_API_KEY or
+    any environment variable, so a real key set on the dev machine for an unrelated project
+    can never combine with a misconfigured base_url to send a real, billed cloud request.
+
+    Returns a ReviewVerdict. Raises ValueError if base_url is empty (fail loud rather than
+    let the OpenAI SDK silently fall back to https://api.openai.com). Raises SystemExit on
+    connection failure, RuntimeError on a persistent server error.
+    """
+    if not base_url:
+        raise ValueError(
+            "run_reviewer_agent: base_url is empty — refusing to let the OpenAI SDK "
+            "fall back to its default (https://api.openai.com)."
+        )
+    provider = OpenAIProvider(base_url=f"{base_url}/v1", api_key="ollama")
+    pyd_model = OpenAIChatModel(
+        model,
+        provider=provider,
+        settings=ModelSettings(temperature=temperature, timeout=timeout),
+    )
+    agent = Agent(pyd_model, output_type=NativeOutput(ReviewVerdict))
+
+    for attempt in range(1, 3):
+        try:
+            result = agent.run_sync(prompt)
+            return result.output
+        except ModelHTTPError as e:
+            if attempt == 1 and e.status_code == 500:
+                # Ollama 500 = model swap not yet complete; wait and retry once
+                log.warning("[CRITIC] Ollama 500 on attempt %d — waiting 12s for model swap, retrying...", attempt)
+                time.sleep(12)
+                continue
+            raise RuntimeError(f"Ollama server error: {e}")
+        except ModelAPIError as e:
+            raise SystemExit(
+                f"\nERROR: Cannot connect to Ollama at {base_url}\n"
+                "Make sure Ollama is running: 'ollama serve'"
+            ) from e
+    raise RuntimeError("Ollama failed after 2 attempts.")
 
 
 def call_ollama(base_url, model, prompt, temperature=0.1, timeout=600):

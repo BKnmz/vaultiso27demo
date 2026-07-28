@@ -3,6 +3,7 @@ Tests for critic.py — assessment parsing, CLAUSE_FOCUS completeness, prompt re
 No real LLM calls.
 """
 
+import json
 import sys
 import tempfile
 import unittest
@@ -13,6 +14,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import critic
 
+from schemas.review import FindingRow, ReviewVerdict
+
 
 SAMPLE_ORG = {
     "name": "Test Corp",
@@ -21,6 +24,26 @@ SAMPLE_ORG = {
     "scope": "Test scope",
     "legal_basis": ["GDPR"],
 }
+
+FIVE_DIMENSIONS = [
+    "ISO Mapping",
+    "Completeness",
+    "Org Specificity",
+    "Internal Consistency",
+    "Audit Readiness",
+]
+
+
+def _verdict(overall_assessment="PASS", clause_id="4.3", clause_name="Scope"):
+    return ReviewVerdict(
+        clause_id=clause_id,
+        clause_name=clause_name,
+        overall_assessment=overall_assessment,
+        confidence="HIGH",
+        findings=[FindingRow(dimension=d, result="PASS", detail="ok") for d in FIVE_DIMENSIONS],
+        required_revisions=[],
+        auditor_verdict="Ready.",
+    )
 
 PASS_OUTPUT = """## Critic Review — Clause 4.3: Scope
 
@@ -198,8 +221,119 @@ class TestRunCriticNoDocument(unittest.TestCase):
 
 class TestOllamaConnectionError(unittest.TestCase):
     def test_connection_error_raises_system_exit(self):
-        with self.assertRaises(SystemExit):
-            critic.call_ollama("http://localhost:9999", "model", "prompt")
+        # This is the one test that lets run_sync() execute for real (a genuine
+        # connection attempt to a closed port, no Agent/OpenAIProvider mocks) — it
+        # trips pydantic_graph's internal asyncio.get_event_loop() DeprecationWarning
+        # on Python 3.12 when no event loop yet exists in this thread. That warning
+        # is pydantic-ai library-internal noise, unrelated to the behavior under
+        # test, so it's suppressed here to keep test output pristine.
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            with self.assertRaises(SystemExit):
+                critic.run_reviewer_agent("http://localhost:9999", "model", "prompt")
+
+
+class TestReviewerAgentNoCloudApi(unittest.TestCase):
+    def test_base_url_never_points_at_a_real_cloud_endpoint(self):
+        # Auditable guard: the reviewer agent must only ever be constructed against
+        # the locally-configured Ollama base_url, never a literal OpenAI/Anthropic host.
+        from pydantic_ai.providers.openai import OpenAIProvider as RealOpenAIProvider
+
+        captured = {}
+
+        def _spy_provider(*, base_url, api_key=None):
+            captured["base_url"] = base_url
+            captured["api_key"] = api_key
+            return RealOpenAIProvider(base_url=base_url, api_key=api_key)
+
+        with patch("critic.OpenAIProvider", _spy_provider), \
+             patch("critic.Agent") as mock_agent_cls:
+            mock_agent_cls.return_value.run_sync.return_value.output = _verdict("PASS")
+            critic.run_reviewer_agent("http://localhost:11434", "qwen2.5:1.5b", "prompt")
+
+        self.assertIn("localhost:11434", captured["base_url"])
+        self.assertNotIn("api.openai.com", captured["base_url"])
+
+    def test_api_key_is_never_read_from_environment(self):
+        # Even if a real OPENAI_API_KEY happens to be set on the dev machine (common,
+        # for unrelated projects), the reviewer agent must never inherit it — api_key
+        # is always the hardcoded dummy "ollama", independent of environment state.
+        import os
+
+        captured = {}
+
+        def _spy_provider(*, base_url, api_key=None):
+            captured["api_key"] = api_key
+            return MagicMock()
+
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-real-looking-key-do-not-use"}), \
+             patch("critic.OpenAIProvider", _spy_provider), \
+             patch("critic.Agent") as mock_agent_cls:
+            mock_agent_cls.return_value.run_sync.return_value.output = _verdict("PASS")
+            critic.run_reviewer_agent("http://localhost:11434", "qwen2.5:1.5b", "prompt")
+
+        self.assertEqual(captured["api_key"], "ollama")
+
+    def test_empty_base_url_raises_before_any_network_call(self):
+        with patch("critic.Agent") as mock_agent_cls, patch("critic.OpenAIProvider") as mock_provider:
+            with self.assertRaises(ValueError):
+                critic.run_reviewer_agent("", "qwen2.5:1.5b", "prompt")
+        mock_provider.assert_not_called()
+        mock_agent_cls.assert_not_called()
+
+
+class TestReviewerAgentUsesNativeOutput(unittest.TestCase):
+    def test_agent_constructed_with_native_output(self):
+        # A bare `output_type=ReviewVerdict` defaults pydantic-ai to tool-calling for
+        # structured output, which small local models (e.g. qwen2.5:1.5b) unreliably
+        # invoke — confirmed empirically: it exhausted retries against real Ollama.
+        # NativeOutput forces Ollama's grammar-constrained json_schema mode instead,
+        # which is enforced at the token level regardless of model size.
+        from pydantic_ai import NativeOutput
+
+        with patch("critic.OpenAIProvider"), patch("critic.Agent") as mock_agent_cls:
+            mock_agent_cls.return_value.run_sync.return_value.output = _verdict("PASS")
+            critic.run_reviewer_agent("http://localhost:11434", "qwen2.5:1.5b", "prompt")
+
+        _, kwargs = mock_agent_cls.call_args
+        self.assertIsInstance(kwargs.get("output_type"), NativeOutput)
+
+
+class TestReviewerAgentModelSwapRetry(unittest.TestCase):
+    def test_500_on_first_attempt_retries_once_then_succeeds(self):
+        from pydantic_ai.exceptions import ModelHTTPError
+
+        good_result = MagicMock()
+        good_result.output = _verdict("PASS")
+
+        mock_agent = MagicMock()
+        mock_agent.run_sync.side_effect = [
+            ModelHTTPError(status_code=500, model_name="qwen2.5:1.5b"),
+            good_result,
+        ]
+
+        with patch("critic.Agent", return_value=mock_agent), \
+             patch("critic.OpenAIProvider"), \
+             patch("critic.time.sleep") as mock_sleep:
+            verdict = critic.run_reviewer_agent("http://localhost:11434", "qwen2.5:1.5b", "prompt")
+
+        self.assertEqual(verdict.overall_assessment, "PASS")
+        self.assertEqual(mock_agent.run_sync.call_count, 2)
+        mock_sleep.assert_called_once_with(12)
+
+    def test_500_on_second_attempt_raises_runtime_error(self):
+        from pydantic_ai.exceptions import ModelHTTPError
+
+        mock_agent = MagicMock()
+        mock_agent.run_sync.side_effect = ModelHTTPError(status_code=500, model_name="qwen2.5:1.5b")
+
+        with patch("critic.Agent", return_value=mock_agent), \
+             patch("critic.OpenAIProvider"), \
+             patch("critic.time.sleep"):
+            with self.assertRaises(RuntimeError):
+                critic.run_reviewer_agent("http://localhost:11434", "qwen2.5:1.5b", "prompt")
 
 
 if __name__ == "__main__":
