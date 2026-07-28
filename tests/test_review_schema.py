@@ -82,6 +82,20 @@ class TestReviewVerdict(unittest.TestCase):
         v = _valid_verdict()
         self.assertEqual(v.required_revisions, [])
 
+    def test_findings_reject_duplicate_dimension(self):
+        """Duplicate dimension should raise ValidationError."""
+        with self.assertRaises(ValidationError):
+            _valid_verdict(
+                findings=[
+                    _finding("ISO Mapping"),
+                    _finding("ISO Mapping"),  # duplicate
+                    _finding("Completeness"),
+                    _finding("Org Specificity"),
+                    _finding("Internal Consistency"),
+                    # "Audit Readiness" is missing
+                ]
+            )
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
