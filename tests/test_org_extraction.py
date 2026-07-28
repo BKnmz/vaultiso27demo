@@ -37,6 +37,13 @@ class TestExtractionAgentNoCloudApi(unittest.TestCase):
         mock_provider.assert_not_called()
         mock_agent_cls.assert_not_called()
 
+    def test_empty_base_url_raises_for_personnel_before_any_network_call(self):
+        with patch("core.Agent") as mock_agent_cls, patch("core.OpenAIProvider") as mock_provider:
+            with self.assertRaises(ValueError):
+                core._extract_personnel_agent_call("some text", {"llm": {"base_url": "", "model": "x"}})
+        mock_provider.assert_not_called()
+        mock_agent_cls.assert_not_called()
+
 
 class TestExtractOrgWithLlm(unittest.TestCase):
     def test_success_returns_plain_dict_not_pydantic_model(self):
