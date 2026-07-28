@@ -235,6 +235,7 @@ class TestRefreshCatalogBestEffort(unittest.TestCase):
 
     def test_malformed_response_never_raises(self):
         mock_resp = MagicMock()
+        mock_resp.status_code = 200
         mock_resp.json.side_effect = ValueError("not json")
         with patch("setup_config.requests.get", return_value=mock_resp):
             try:
@@ -254,6 +255,20 @@ class TestRefreshCatalogBestEffort(unittest.TestCase):
                 setup_config.refresh_catalog_best_effort()
             self.assertTrue(cache_path.exists())
         self.assertEqual(setup_config._CATALOG_PATH.read_text(encoding="utf-8"), original_bundled)
+
+    def test_missing_models_key_never_raises_and_does_not_write_cache(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_path = Path(tmpdir) / "models_catalog.online_cache.json"
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.json.return_value = {"foo": "bar"}  # Valid dict, but no "models" key
+            with patch("setup_config.requests.get", return_value=mock_resp), \
+                 patch("setup_config._ONLINE_CACHE_PATH", cache_path):
+                try:
+                    setup_config.refresh_catalog_best_effort()
+                except Exception as e:
+                    self.fail(f"refresh_catalog_best_effort() raised on missing 'models' key: {e}")
+            self.assertFalse(cache_path.exists(), "cache file should not be written when 'models' key is missing")
 
 
 if __name__ == "__main__":
