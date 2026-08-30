@@ -14,7 +14,7 @@ echo    1. Verify Python 3.9+
 echo    2. Create a Python virtual environment
 echo    3. Install required packages  (~500 MB, needs internet)
 echo    4. Build the ISO 27001 knowledge base  (~90 MB, needs internet)
-echo    5. Pull AI models matched to your hardware via Ollama  (4-8 GB, needs internet)
+echo    5. Detect your hardware and pull matching AI models via Ollama  (4-8 GB, needs internet)
 echo.
 echo  After first setup the tool runs 100%% offline.
 echo  ============================================================
@@ -89,20 +89,6 @@ echo.
 echo  [OK]  Packages installed
 
 :: -------------------------------------------------------------
-:: STEP 3b — Detect hardware and configure settings
-:: -------------------------------------------------------------
-echo.
-echo  [STEP 3b]  Detecting hardware and configuring settings...
-echo.
-python "%SCRIPT_DIR%setup_config.py"
-if errorlevel 1 (
-    echo.
-    echo  WARNING: Hardware detection failed. Default settings will be used.
-    echo  You can manually adjust settings in Settings ^> AI Engine.
-    echo.
-)
-
-:: -------------------------------------------------------------
 :: STEP 4 - Build knowledge base
 :: -------------------------------------------------------------
 echo.
@@ -144,17 +130,29 @@ if errorlevel 1 (
 ) else (
     for /f "tokens=*" %%v in ('ollama --version 2^>^&1') do echo  [OK]  %%v
 
-    :: Resolve tier-optimal model tags from hardware detection (setup_config.py already ran)
+    :: Detect hardware, present ranked model choices, let the user pick.
+    :: Run directly (not via `for /f`) so input() reaches the real console -
+    :: `for /f` command substitution does not reliably pass stdin through on
+    :: Windows cmd.exe.
+    echo.
+    python "%SCRIPT_DIR%setup_config.py"
+    if errorlevel 1 (
+        echo.
+        echo  WARNING: Hardware detection failed. Default settings will be used.
+    )
+
+    :: Read back the chosen generator model + reviewer model from config.yaml
+    :: (setup_config.py's main() already wrote them via apply_to_config).
     set "GEN_MODEL="
     set "REV_MODEL="
-    for /f "delims=" %%m in ('python "%SCRIPT_DIR%setup_config.py" --print-models 2^>nul') do (
+    for /f "delims=" %%m in ('python -c "import yaml; c=yaml.safe_load(open('%SCRIPT_DIR%config.yaml', encoding='utf-8')); print(c['llm']['model']); print(c['critic']['model'])" 2^>nul') do (
         if not defined GEN_MODEL (
             set "GEN_MODEL=%%m"
         ) else if not defined REV_MODEL (
             set "REV_MODEL=%%m"
         )
     )
-    :: Fallback if detection failed
+    :: Fallback if detection or config read failed
     if not defined GEN_MODEL set "GEN_MODEL=phi4-mini:3.8b-q4_K_M"
     if not defined REV_MODEL set "REV_MODEL=qwen2.5:1.5b"
 
