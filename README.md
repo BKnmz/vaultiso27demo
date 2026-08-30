@@ -55,7 +55,7 @@ Browse all generated clauses with status and AI review badges. Download individu
 ![Documents](docs/screenshots/documents.png)
 
 ### Annex A controls — evidence tracker
-21-control evidence tracker with visual theme map. Toggle applicability, set implementation status, add justification and evidence references. Export Statement of Applicability to Excel.
+93-control evidence tracker (all 4 Annex A themes) with visual theme map. Toggle applicability, set implementation status, add justification and evidence references. Export Statement of Applicability to Excel.
 
 ![Annex A](docs/screenshots/annex_a.png)
 
@@ -129,6 +129,6 @@ All inference local. All data local. Zero telemetry.
 
 **ISO/IEC 27001:2022** is © ISO/IEC. This tool does **not** redistribute the standard text.
 
-The audit checklist (`rag/ISO27001_Audit_Checklist_demo.xlsx`) contains original paraphrases of 21 Annex A controls — not verbatim ISO text. See the **LEGAL_NOTICE** sheet inside the file and [NOTICE.md](NOTICE.md) for details.
+The audit checklist (`rag/ISO27001_Audit_Checklist_demo.xlsx`) contains original paraphrases of 25 Annex A controls — not verbatim ISO text. See the **LEGAL_NOTICE** sheet inside the file and [NOTICE.md](NOTICE.md) for details.
 
 Generated documents are drafts. Review against the official standard before any certification process. Source code: [Elastic License 2.0](LICENSE) — free for internal use, no redistribution. Checklist paraphrases: CC BY 4.0.
