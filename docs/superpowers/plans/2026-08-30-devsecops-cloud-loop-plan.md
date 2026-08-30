@@ -10,25 +10,48 @@ actually broken, never pushing to `main` unattended.
 self-contained Opus-orchestrated prompt. The orchestrator runs the target repo's own test
 suite first as a no-op gate; only on red does it spawn Haiku-default sub-agents (reviewer,
 coder, tester) via the `Agent` tool, escalating a given sub-agent to Sonnet on repeated
-failure or a security-relevant finding, capped at 3 coder retries, then opens a PR via `gh`.
+failure or a security-relevant finding, capped at 3 coder retries, then pushes a fix branch
+(no auto-PR — see Task 1 findings below).
 
 **Tech Stack:** Claude Code cloud routines (`RemoteTrigger` tool / `schedule` skill), `git`,
-`gh` CLI (assumed present in the `anthropic_cloud` sandbox — verified in Task 1), `pytest`.
+`pytest` (installed via `pip install -r requirements.txt` as the orchestrator's own first
+step — not preinstalled in the sandbox, confirmed in Task 1).
 
 **Spec:** `docs/superpowers/specs/2026-08-30-devsecops-cloud-loop-design.md`
+
+## Status: Task 1 complete, findings changed the design (2026-08-30)
+
+Real capability probe against `BKnmz/vaultiso27demo` (note: **actual repo name is
+`vaultiso27demo`, lowercase/no hyphen** — the spec's `VaultISO27-demo` was wrong):
+
+- `git` 2.43.0 present. `gh` CLI **not installed**. `pytest` **not preinstalled** — the
+  orchestrator prompt now installs `pip install -r requirements.txt` as Step 0.
+- `git push` to a new branch **failed with 403** until the user installed the Claude GitHub
+  App for the repo (https://github.com/apps/claude/installations/select_target) — this is a
+  one-time manual step per repo, done by the user during this session. After that, push
+  succeeded cleanly.
+- **Branch deletion also failed with 403**, even after push worked — the GitHub App's grant
+  apparently doesn't include delete. The orchestrator never attempts to delete a branch.
+- **PR-creation-via-API is unverified and was not tested** — probing for a usable token was
+  blocked by Claude Code's own auto-mode safety classifier (reasonably: it pattern-matches
+  credential-exfiltration attempts, even with explicit redaction instructions). User decided
+  (2026-08-30): **the fix pipeline pushes a branch only, no auto-PR.** `git push`'s own
+  stdout prints a "create PR" URL on success — the orchestrator captures and reports that
+  link instead of calling any GitHub API. A human opens the PR manually via that link.
 
 ## Global Constraints
 
 - Cloud routines have no access to local files, local services (Ollama), or `rtk` — commit
-  path uses plain `git`/`gh` only.
+  path uses plain `git` only (no `gh`, no verified API token — see above).
 - Every fire runs the no-op gate (full pytest + static checks) first; real work only happens
   on red.
 - Sub-agent model default is `haiku`; escalate to `sonnet` per-call only, never globally.
   The orchestrator itself is `claude-opus-5` and never edits code directly.
 - Fix pipeline is capped at 3 coder retries; if still red, stop and report — never loop
   indefinitely.
-- Commit step **never pushes directly to `main`** — always opens a PR.
-- Two routines, fully independent: `BKnmz/VaultISO27` and `BKnmz/VaultISO27-demo`.
+- Commit step **never pushes directly to `main`**, and never attempts branch deletion
+  (confirmed broken in the sandbox) — pushes a fix branch and reports the PR-creation link.
+- Two routines, fully independent: `BKnmz/VaultISO27` and `BKnmz/vaultiso27demo`.
 
 ---
 
@@ -41,39 +64,25 @@ failure or a security-relevant finding, capped at 3 coder retries, then opens a 
   is unavailable, Task 2's prompt must use the GitHub REST API via `curl` instead of `gh pr
   create`.
 
-- [ ] **Step 1: Load the RemoteTrigger tool and create one throwaway test routine**
+- [x] **Step 1: Load the RemoteTrigger tool and create one throwaway test routine**
 
-```
-ToolSearch: select:RemoteTrigger
-```
-Then `RemoteTrigger` with `action: "create"`, targeting a scratch repo or
-`BKnmz/VaultISO27-demo` with `run_once_at` a few minutes in the future (not
-`cron_expression` — this is a one-off capability probe, not the real routine), and a prompt
-that simply runs:
-```
-Run: git --version && gh --version && python -m pytest --version
-Report the output of each command, and whether `git push` to a new branch on this repo
-succeeds (create branch `capability-probe`, push an empty commit, then report the result —
-do not open a PR, and delete the branch afterward with `git push origin --delete
-capability-probe`).
-```
+Done — routine `capability-probe-vaultiso27demo` (`trig_019FmeYU5EY5QyMiuikRkWNK`), model
+`claude-haiku-4-5` (a probe doesn't need Opus), targeting `BKnmz/vaultiso27demo`.
 
-- [ ] **Step 2: Run it and read the log**
+- [x] **Step 2: Run it and read the log**
 
-`RemoteTrigger action: "run"` on the probe routine, then `action: "list_runs"` →
-`action: "get_run_log"` on the resulting session. Confirm: `git`/`gh`/`pytest` all present,
-and the push succeeded (i.e. the routine's attached `git_repository` source has write
-access — if not, this blocks Task 4's PR step and needs a GitHub token configured on the
-routine before proceeding; consult the `schedule` skill's connector-setup guidance for how
-to attach credentials if push fails).
+Ran twice: first attempt found `git push` returning 403 ("Claude doesn't have GitHub access
+... An org admin can install the Claude GitHub App"). User installed the app
+(https://github.com/apps/claude/installations/select_target) mid-session; second run
+confirmed push works. Full findings folded into "Status" section above.
 
-- [ ] **Step 3: Record the finding, delete the probe routine**
+- [x] **Step 3: Record the finding, delete the probe routine**
 
-Note in this plan's Task 2 which PR-creation method to use (`gh pr create` if available,
-otherwise the GitHub REST API pattern below). Cloud routines cannot be deleted via
-`RemoteTrigger` (no delete action) — direct the user to
-`https://claude.ai/code/routines` to remove the probe routine manually, or leave it
-disabled (`action: "update"`, `enabled: false`) if deletion isn't urgent.
+Findings recorded above. Cloud routines can't be deleted via `RemoteTrigger` (no delete
+action, confirmed) — disabled instead (`action: "update"`, `enabled: false`). The stray
+`capability-probe` branch the probe couldn't delete itself (403) was deleted from the local
+checkout instead (`git push origin --delete capability-probe` — worked fine with the
+session's own git credentials, unlike the sandbox's).
 
 ---
 
@@ -89,87 +98,16 @@ disabled (`action: "update"`, `enabled: false`) if deletion isn't urgent.
   Task 3 copies its content into the `RemoteTrigger` create call verbatim, and any future
   edit updates both this file and the routine via `RemoteTrigger action: "update"`.
 
-- [ ] **Step 1: Write the prompt**
+- [x] **Step 1: Write the prompt**
 
-```markdown
-# DevSecOps Daily Loop — Orchestrator Instructions
+Written to `docs/devsecops_loop_prompt.md` (not duplicated here — see that file for the
+authoritative text). Revised from this plan's original draft based on Task 1's real
+findings: adds a Step 0 `pip install -r requirements.txt` (pytest isn't preinstalled),
+replaces the `gh pr create`/REST-API commit step with a plain `git push` whose own stdout
+"create PR" link gets captured and reported (no PR-API call — see Status section), and adds
+an explicit "never attempt branch deletion" note (confirmed broken in the sandbox).
 
-You are the daily health-check orchestrator for this repository. You run once a day. You
-have no memory of previous runs — everything you need to know, you determine fresh from the
-repo's current state. Follow these steps in order. Do not skip the no-op gate.
-
-## Step 1 — No-op gate
-
-Run the full test suite and a basic static sanity check:
-
-```
-python -m pytest tests/ -q
-python -c "import yaml; yaml.safe_load(open('config.yaml', encoding='utf-8'))"
-```
-
-If both succeed (pytest exits 0, the config parses with no exception): report "Daily check:
-clean, no action taken" and STOP. Do not proceed to any step below. Do not open a PR. Do not
-spawn any sub-agent. This is the expected outcome most days.
-
-If either fails: proceed to Step 2.
-
-## Step 2 — Reviewer (spawn via the Agent tool, model: haiku by default)
-
-Spawn a sub-agent with this brief: "Run the `code-review` skill and `security-review` skill
-against the current repository state (not a diff against a base branch — the working tree
-as it stands). Report findings as a list: file, line, severity, one-sentence description."
-
-If the reviewer's findings look security-relevant (anything touching auth, secrets, input
-validation, or the offline/no-cloud-API invariant this project enforces) OR the reviewer's
-own output suggests it struggled to reach a confident verdict, re-spawn the same review with
-model: sonnet instead of trusting the haiku pass.
-
-## Step 3 — Coder (spawn via the Agent tool, model: haiku by default)
-
-Spawn a sub-agent with this brief: "Fix the following: [insert the pytest failure output
-from Step 1, plus the reviewer's findings from Step 2]. Make the minimal change that
-resolves each — do not refactor unrelated code, do not add features."
-
-## Step 4 — Tester (spawn via the Agent tool, model: haiku)
-
-Spawn a sub-agent to re-run `python -m pytest tests/ -q`. Report pass/fail.
-
-- If pass: proceed to Step 5.
-- If fail: this is retry N of 3. If N < 3, re-spawn the Coder (Step 3) with model: sonnet
-  this time (escalate — haiku's first attempt didn't fully resolve it), including the new
-  failure output. If N = 3 and still failing: STOP. Do not commit anything. Report "Daily
-  check: found issues, could not resolve after 3 attempts" with the outstanding pytest
-  failure output, and end here.
-
-## Step 5 — Commit (spawn via the Agent tool, model: haiku)
-
-Only reached if Step 4 passed. Spawn a sub-agent with this brief:
-
-```
-git checkout -b devsecops/auto-fix-<YYYY-MM-DD>
-git add -A
-git commit -m "fix: daily devsecops auto-fix — <one-line summary of what was wrong>"
-git push -u origin devsecops/auto-fix-<YYYY-MM-DD>
-gh pr create --title "DevSecOps auto-fix <YYYY-MM-DD>" --body "<summary of what Step 1 found, what Step 2's reviewer flagged, and what Step 3's coder changed>"
-```
-
-(If Task 1's capability probe found `gh` unavailable, use the GitHub REST API instead:
-`curl -X POST -H "Authorization: token $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" https://api.github.com/repos/<owner>/<repo>/pulls -d '{"title":"...", "head":"devsecops/auto-fix-<date>", "base":"main", "body":"..."}'`)
-
-**Never run `git push origin main` or any command that writes to `main` directly.** The PR
-is the only output of a non-clean day. A human merges it.
-
-## Model tiering summary (for your own reference while executing this)
-
-- You (the orchestrator): stay on your own model throughout. Never fix code yourself —
-  always delegate via the Agent tool, even for a one-line fix.
-- Reviewer/Coder/Tester/Commit sub-agents: `model: haiku` by default.
-- Escalate a specific sub-agent call to `model: sonnet` only when: the reviewer's findings
-  are security-relevant, or a coder retry follows a failed test (Step 4's retry path).
-  Escalation applies to that one call, not to every subsequent sub-agent in the run.
-```
-
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add docs/devsecops_loop_prompt.md
