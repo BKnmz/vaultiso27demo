@@ -443,6 +443,33 @@ def detect_main():
     print("  (Use setup_config.py without --detect to apply these settings to config.yaml)")
 
 
+def choose_model_interactive(tier: dict) -> str:
+    """Present up to 3 benchmark-ranked choices for this tier and return the
+    chosen Ollama tag. Falls back to the tier's single default if there are
+    no benchmark_choices (fetch never ran, or ranking found nothing that fits)."""
+    choices = tier.get("benchmark_choices") or []
+    if not choices:
+        return tier["gen_model"]
+
+    print()
+    print(f"  Ranked model choices for {tier['label']}:")
+    for i, c in enumerate(choices, start=1):
+        print(f"    [{i}] {c['tag']}  (family: {c['family']}, "
+              f"intelligence_index: {c['intelligence_index']:.1f}, {c['size_gb']} GB)")
+    print(f"  Press Enter for the top-ranked choice ([1]).")
+    raw = input("  Choice: ").strip()
+    if not raw:
+        return choices[0]["tag"]
+    try:
+        idx = int(raw)
+        if 1 <= idx <= len(choices):
+            return choices[idx - 1]["tag"]
+    except ValueError:
+        pass
+    print(f"  Invalid choice - using top-ranked: {choices[0]['tag']}")
+    return choices[0]["tag"]
+
+
 def main():
     print()
     print("  Detecting hardware...")
@@ -453,14 +480,27 @@ def main():
     print(f"  OS   : {hw['os']}")
 
     tier = select_tier(hw)
+
+    from catalog.refresh_model_catalog import refresh as refresh_benchmark_catalog
+    try:
+        refresh_benchmark_catalog(force=False)
+        catalog = load_models_catalog()
+        tier["benchmark_choices"] = catalog["tiers"].get(tier["name"], {}).get("benchmark_choices", [])
+    except Exception:
+        pass  # silent fallback per spec - proceed with whatever tier already has
+
     print()
     print(f"  Hardware tier : {tier['label']}")
     print(f"  Why           : {tier['why']}")
-    print(f"  Gen model     : {tier['gen_model']}")
     print(f"  Reviewer      : {tier['reviewer_model']}")
     print(f"  Expected speed: {tier['speed']}")
     print(f"  Ollama timeout: {tier['ollama_timeout']}s")
     print(f"  Swap delay    : {tier['model_swap_delay']}s")
+
+    chosen_gen_model = choose_model_interactive(tier)
+    tier = dict(tier)
+    tier["gen_model"] = chosen_gen_model
+    print(f"  Gen model     : {tier['gen_model']}")
 
     apply_to_config(hw, tier)
     print()
@@ -482,6 +522,16 @@ if __name__ == "__main__":
         help="Best-effort check for newer model tags against a public index. Never touches "
              "models_catalog.json or config.yaml; writes an informational cache file only.",
     )
+    parser.add_argument(
+        "--refresh-benchmarks", action="store_true",
+        help="Force a benchmark-ranked catalog refresh (OpenRouter intelligence_index) "
+             "regardless of the 90-day cache, then exit. Requires OPENROUTER_API_KEY.",
+    )
+    parser.add_argument(
+        "--choose-model", action="store_true",
+        help="Detect hardware, print ranked choices, prompt for a pick, print the chosen "
+             "tag alone on stdout (for install.bat to capture). Does not write config.yaml.",
+    )
     args = parser.parse_args()
     if args.print_models:
         print_models()
@@ -489,5 +539,15 @@ if __name__ == "__main__":
         detect_main()
     elif args.refresh_catalog:
         refresh_catalog_best_effort()
+    elif args.refresh_benchmarks:
+        from catalog.refresh_model_catalog import refresh as refresh_benchmark_catalog
+        changed = refresh_benchmark_catalog(force=True)
+        print("Benchmark catalog refreshed." if changed
+              else "Refresh failed or skipped - see above for details, cache left untouched.")
+    elif args.choose_model:
+        tier = select_tier(detect_hardware())
+        catalog = load_models_catalog()
+        tier["benchmark_choices"] = catalog["tiers"].get(tier["name"], {}).get("benchmark_choices", [])
+        print(choose_model_interactive(tier))
     else:
         main()

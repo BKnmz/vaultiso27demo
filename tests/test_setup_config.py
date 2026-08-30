@@ -271,5 +271,47 @@ class TestRefreshCatalogBestEffort(unittest.TestCase):
             self.assertFalse(cache_path.exists(), "cache file should not be written when 'models' key is missing")
 
 
+class TestChooseModelInteractive(unittest.TestCase):
+    def test_falls_back_to_default_when_no_benchmark_choices(self):
+        tier = {"name": "minimal", "label": "Minimal", "gen_model": "qwen2.5:1.5b", "benchmark_choices": []}
+        with patch("builtins.input", return_value=""):
+            chosen = setup_config.choose_model_interactive(tier)
+        self.assertEqual(chosen, "qwen2.5:1.5b")
+
+    def test_picks_ranked_choice_by_number(self):
+        tier = {
+            "name": "minimal", "label": "Minimal", "gen_model": "qwen2.5:1.5b",
+            "benchmark_choices": [
+                {"tag": "qwen2.5:1.5b", "family": "qwen2.5", "intelligence_index": 18.2, "size_gb": 0.9},
+                {"tag": "phi4-mini:3.8b-q4_K_M", "family": "phi-4", "intelligence_index": 42.1, "size_gb": 2.5},
+            ],
+        }
+        with patch("builtins.input", return_value="2"):
+            chosen = setup_config.choose_model_interactive(tier)
+        self.assertEqual(chosen, "phi4-mini:3.8b-q4_K_M")
+
+    def test_blank_input_picks_top_ranked_choice(self):
+        tier = {
+            "name": "minimal", "label": "Minimal", "gen_model": "qwen2.5:1.5b",
+            "benchmark_choices": [
+                {"tag": "phi4-mini:3.8b-q4_K_M", "family": "phi-4", "intelligence_index": 42.1, "size_gb": 2.5},
+            ],
+        }
+        with patch("builtins.input", return_value=""):
+            chosen = setup_config.choose_model_interactive(tier)
+        self.assertEqual(chosen, "phi4-mini:3.8b-q4_K_M")
+
+    def test_invalid_input_falls_back_to_top_choice(self):
+        tier = {
+            "name": "minimal", "label": "Minimal", "gen_model": "qwen2.5:1.5b",
+            "benchmark_choices": [
+                {"tag": "phi4-mini:3.8b-q4_K_M", "family": "phi-4", "intelligence_index": 42.1, "size_gb": 2.5},
+            ],
+        }
+        with patch("builtins.input", return_value="not-a-number"):
+            chosen = setup_config.choose_model_interactive(tier)
+        self.assertEqual(chosen, "phi4-mini:3.8b-q4_K_M")
+
+
 if __name__ == "__main__":
     unittest.main()
