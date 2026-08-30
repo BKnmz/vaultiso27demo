@@ -128,13 +128,21 @@ def load_models_catalog(path=None):
         return json.load(f)
 
 
-def _build_tiers():
+def _build_tiers(catalog=None):
     """Merge _TIER_TUNING (Python, hardware behavior) with models_catalog.json
     (model identity) into the full tier dicts the rest of this module expects."""
-    catalog = load_models_catalog()
+    catalog = catalog if catalog is not None else load_models_catalog()
     tiers = []
     for tuning in _TIER_TUNING:
-        entry = catalog["tiers"][tuning["name"]]
+        try:
+            entry = catalog["tiers"][tuning["name"]]
+        except KeyError:
+            raise KeyError(
+                f"_TIER_TUNING has a tier named '{tuning['name']}' but models_catalog.json "
+                f"has no matching entry under \"tiers\". These two files must stay in "
+                f"lockstep — add '{tuning['name']}' to models_catalog.json's \"tiers\", or "
+                f"remove/rename the _TIER_TUNING entry to match."
+            ) from None
         merged = dict(tuning)
         merged.update({
             "gen_model": entry["gen_model"],
@@ -147,13 +155,13 @@ def _build_tiers():
     return tiers
 
 
-def _build_legacy_factory_models():
+def _build_legacy_factory_models(catalog=None):
     """Factory model tags that apply_to_config() is allowed to overwrite on
     re-detection: current tier models plus every models_catalog.json legacy_tags
     entry (older factory defaults, appended over time, never removed) — so an
     install that picked an old default migrates cleanly. A tag a user typed by
     hand is NOT in this set and is left untouched."""
-    catalog = load_models_catalog()
+    catalog = catalog if catalog is not None else load_models_catalog()
     tags = set(catalog.get("legacy_tags", []))
     for entry in catalog["tiers"].values():
         tags.add(entry["gen_model"])
@@ -182,8 +190,10 @@ def refresh_catalog_best_effort():
         pass  # advisory only — never block or fail install on this
 
 
-TIERS = _build_tiers()
-LEGACY_FACTORY_MODELS = _build_legacy_factory_models()
+_catalog = load_models_catalog()
+TIERS = _build_tiers(_catalog)
+LEGACY_FACTORY_MODELS = _build_legacy_factory_models(_catalog)
+del _catalog
 
 
 # ---------------------------------------------------------------------------

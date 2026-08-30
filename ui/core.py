@@ -17,7 +17,9 @@ import requests
 import streamlit as st
 import yaml
 
+import httpx
 from pydantic_ai import Agent, NativeOutput
+from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError, UnexpectedModelBehavior
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.settings import ModelSettings
@@ -1035,9 +1037,23 @@ def extract_org_with_llm(text, cfg):
 
     try:
         return _extract_org_agent_call(text, cfg).model_dump()
+    except httpx.TimeoutException:
+        st.error(
+            "The AI engine is taking too long (timeout reached). "
+            "This usually means the model is still loading into memory. "
+            "Wait 1–2 minutes, then try again — it will be faster on the second attempt."
+        )
+    except (httpx.ConnectError, ModelAPIError):
+        st.error("Cannot reach the AI engine. "
+                 "Go to Organization > AI Engine and check that Ollama is running.")
+    except UnexpectedModelBehavior:
+        st.error("The AI returned an unexpected response. "
+                 "Try uploading a shorter or plain-text (.txt) version of your document.")
+    except ModelHTTPError as e:
+        st.error(f"AI engine error: {e}. Try again in a moment.")
     except Exception as e:
         st.error(f"Extraction error: {e}")
-        return None
+    return None
 
 
 def _extract_personnel_agent_call(text, cfg) -> list[PersonnelEntry]:

@@ -20,11 +20,10 @@ from pathlib import Path
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 os.environ.setdefault("HF_DATASETS_OFFLINE", "1")
 
-import requests
 import yaml
 
 from pydantic_ai import Agent, NativeOutput
-from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
+from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError, UnexpectedModelBehavior
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.settings import ModelSettings
@@ -248,44 +247,13 @@ def run_reviewer_agent(base_url, model, prompt, temperature=0.1, timeout=600):
                 f"\nERROR: Cannot connect to Ollama at {base_url}\n"
                 "Make sure Ollama is running: 'ollama serve'"
             ) from e
-    raise RuntimeError("Ollama failed after 2 attempts.")
-
-
-def call_ollama(base_url, model, prompt, temperature=0.1, timeout=600):
-    import time
-    url = f"{base_url}/api/generate"
-    payload = {
-        "model": model,
-        "prompt": prompt,
-        "stream": False,
-        "options": {
-            "temperature": temperature,
-            "num_predict": 1000,
-            "num_ctx": 6144,
-        },
-    }
-    for attempt in range(1, 3):
-        try:
-            resp = requests.post(url, json=payload, timeout=timeout)
-            resp.raise_for_status()
-            return resp.json().get("response", "").strip()
-        except requests.exceptions.HTTPError as e:
-            if attempt == 1 and getattr(e.response, "status_code", 0) == 500:
-                # Ollama 500 = model swap not yet complete; wait and retry once
-                log.warning("[CRITIC] Ollama 500 on attempt %d — waiting 12s for model swap, retrying...", attempt)
-                time.sleep(12)
-                continue
-            raise RuntimeError(f"Ollama server error: {e}")
-        except requests.exceptions.ReadTimeout:
-            raise RuntimeError(
-                f"Ollama timed out after {timeout}s (model: {model}). "
-                "Model may still be loading. Wait 1-2 minutes and try again."
-            )
-        except requests.exceptions.ConnectionError:
-            raise SystemExit(
-                f"\nERROR: Cannot connect to Ollama at {base_url}\n"
-                "Make sure Ollama is running: 'ollama serve'"
-            )
+        except UnexpectedModelBehavior as e:
+            # Model emitted syntactically valid but schema-invalid output (e.g. a
+            # duplicated ReviewVerdict dimension) and exhausted pydantic-ai's own
+            # output-retries. Not a ModelHTTPError/ModelAPIError sibling - convert
+            # to RuntimeError so every caller's existing except RuntimeError path
+            # (pipeline.py, ui/_pages/review.py) handles it the same as a server error.
+            raise RuntimeError(f"AI Reviewer returned invalid output: {e}") from e
     raise RuntimeError("Ollama failed after 2 attempts.")
 
 
