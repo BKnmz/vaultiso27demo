@@ -57,7 +57,7 @@ def check_hardware_config():
     if "timeouts" not in cfg:
         log.info("Hardware config not found — running auto-configuration...")
         result = subprocess.run(
-            [sys.executable, str(BASE_DIR / "setup_config.py")],
+            [sys.executable, str(BASE_DIR / "setup_config.py"), "--non-interactive"],
             cwd=str(BASE_DIR),
         )
         if result.returncode != 0:
@@ -81,6 +81,20 @@ def check_rag_index():
     log.info("RAG index  OK")
 
 
+_MIN_STRUCTURED_OUTPUT_VERSION = (0, 5, 0)
+
+
+def _ollama_version_supports_structured_output(version_str):
+    """Ollama v0.5.0+ enforces format=json_schema via grammar-constrained decoding —
+    the AI Reviewer relies on this. Returns True when unparseable (fail open — this
+    is an advisory warning, not a hard requirement check)."""
+    try:
+        parts = tuple(int(p) for p in version_str.split(".")[:3])
+        return parts >= _MIN_STRUCTURED_OUTPUT_VERSION
+    except (ValueError, AttributeError):
+        return True
+
+
 def check_ollama():
     import requests
     try:
@@ -91,6 +105,15 @@ def check_ollama():
         r.raise_for_status()
         models = [m["name"] for m in r.json().get("models", [])]
         log.info("Ollama running  OK  (models: %s)", ', '.join(models) if models else 'none pulled yet')
+        try:
+            v = requests.get(f"{base_url}/api/version", timeout=3).json().get("version", "")
+            if v and not _ollama_version_supports_structured_output(v):
+                log.warning(
+                    "Ollama %s is older than 0.5.0 — structured AI Reviewer output "
+                    "may not be enforced. Consider upgrading: https://ollama.com/download", v
+                )
+        except Exception:
+            pass  # advisory only — never block startup on this
         if not models:
             gen_model_hint = cfg.get("llm", {}).get("model", "phi4-mini:3.8b-q4_K_M")
             log.warning("No models pulled yet. Run: ollama pull %s", gen_model_hint)

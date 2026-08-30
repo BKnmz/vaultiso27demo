@@ -14,7 +14,7 @@ echo    1. Verify Python 3.9+
 echo    2. Create a Python virtual environment
 echo    3. Install required packages  (~500 MB, needs internet)
 echo    4. Build the ISO 27001 knowledge base  (~90 MB, needs internet)
-echo    5. Pull AI models matched to your hardware via Ollama  (4-8 GB, needs internet)
+echo    5. Detect your hardware and pull matching AI models via Ollama  (4-8 GB, needs internet)
 echo.
 echo  After first setup the tool runs 100%% offline.
 echo  ============================================================
@@ -89,20 +89,6 @@ echo.
 echo  [OK]  Packages installed
 
 :: -------------------------------------------------------------
-:: STEP 3b — Detect hardware and configure settings
-:: -------------------------------------------------------------
-echo.
-echo  [STEP 3b]  Detecting hardware and configuring settings...
-echo.
-python "%SCRIPT_DIR%setup_config.py"
-if errorlevel 1 (
-    echo.
-    echo  WARNING: Hardware detection failed. Default settings will be used.
-    echo  You can manually adjust settings in Settings ^> AI Engine.
-    echo.
-)
-
-:: -------------------------------------------------------------
 :: STEP 4 - Build knowledge base
 :: -------------------------------------------------------------
 echo.
@@ -123,10 +109,25 @@ if errorlevel 1 (
 )
 
 :: -------------------------------------------------------------
-:: STEP 5 - Ollama AI engine
+:: STEP 5 - Detect hardware, choose models, pull via Ollama
 :: -------------------------------------------------------------
 echo.
-echo  [STEP 5/5]  Checking Ollama AI engine...
+echo  [STEP 5/5]  Detecting hardware and configuring settings...
+echo.
+:: Detect hardware, present ranked model choices, let the user pick, write
+:: config.yaml. Runs unconditionally (even if Ollama isn't installed yet) so
+:: config.yaml is always calibrated - matches the old STEP 3b's behavior, just
+:: now interactive. Run directly (not via `for /f`) so input() reaches the
+:: real console - `for /f` command substitution does not reliably pass stdin
+:: through on Windows cmd.exe.
+python "%SCRIPT_DIR%setup_config.py"
+if errorlevel 1 (
+    echo.
+    echo  WARNING: Hardware detection failed. Default settings will be used.
+)
+
+echo.
+echo  Checking Ollama AI engine...
 ollama --version >nul 2>&1
 if errorlevel 1 (
     echo.
@@ -144,19 +145,31 @@ if errorlevel 1 (
 ) else (
     for /f "tokens=*" %%v in ('ollama --version 2^>^&1') do echo  [OK]  %%v
 
-    :: Resolve tier-optimal model tags from hardware detection (setup_config.py already ran)
+    :: Read back the chosen generator model + reviewer model from config.yaml
+    :: (setup_config.py's main() already wrote them via apply_to_config).
+    :: --print-config-models validates each tag against a safe Ollama-tag
+    :: charset itself and refuses to print anything else - this avoids both
+    :: splicing SCRIPT_DIR into an inline `python -c` string literal and
+    :: handing a config.yaml value straight to `ollama pull` unvalidated.
     set "GEN_MODEL="
     set "REV_MODEL="
-    for /f "delims=" %%m in ('python "%SCRIPT_DIR%setup_config.py" --print-models 2^>nul') do (
+    for /f "delims=" %%m in ('python "%SCRIPT_DIR%setup_config.py" --print-config-models 2^>nul') do (
         if not defined GEN_MODEL (
             set "GEN_MODEL=%%m"
         ) else if not defined REV_MODEL (
             set "REV_MODEL=%%m"
         )
     )
-    :: Fallback if detection failed
+    :: Fallback if detection or config read/validation failed
     if not defined GEN_MODEL set "GEN_MODEL=phi4-mini:3.8b-q4_K_M"
     if not defined REV_MODEL set "REV_MODEL=qwen2.5:1.5b"
+
+    :: Defense-in-depth: re-validate in batch too, in case GEN_MODEL/REV_MODEL
+    :: ever reach this point some other way. Only letters/digits/._: - allowed
+    :: (a real Ollama tag, e.g. "phi4-mini:3.8b-q4_K_M") - anything else falls
+    :: back to the safe default rather than reaching `ollama pull` unquoted.
+    echo %GEN_MODEL%| findstr /r /v "^[A-Za-z0-9._:-]*$" >nul && set "GEN_MODEL=phi4-mini:3.8b-q4_K_M"
+    echo %REV_MODEL%| findstr /r /v "^[A-Za-z0-9._:-]*$" >nul && set "REV_MODEL=qwen2.5:1.5b"
 
     echo.
     echo  Pulling document generator model  (%GEN_MODEL%)

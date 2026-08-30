@@ -3,9 +3,12 @@ Tests for setup_config.py — tier selection (VRAM-fit-first OR logic) and
 the LEGACY_FACTORY_MODELS migration set. No hardware probing, no LLM calls.
 """
 
+import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -168,6 +171,241 @@ class TestItemCountsStructure(unittest.TestCase):
                 setup_config.CONFIG_PATH = orig_path
         finally:
             shutil.rmtree(tmpdir)
+
+
+class TestModelsCatalogFile(unittest.TestCase):
+    """The bundled models_catalog.json is the source of truth for gen_model/
+    reviewer_model/label/why/speed — TIERS merges it at import time with the
+    Python-side hardware-tuning fields (min_ram_gb, min_vram_gb, timeouts, etc.)."""
+
+    def test_bundled_catalog_has_all_five_tiers(self):
+        catalog = setup_config.load_models_catalog()
+        self.assertEqual(
+            set(catalog["tiers"].keys()),
+            {"high", "mid", "cpu_rich", "low", "minimal"},
+        )
+
+    def test_bundled_catalog_tier_entries_have_required_keys(self):
+        catalog = setup_config.load_models_catalog()
+        required = {"gen_model", "reviewer_model", "label", "why", "speed"}
+        for name, entry in catalog["tiers"].items():
+            missing = required - set(entry.keys())
+            self.assertEqual(missing, set(), f"catalog tier '{name}' missing keys: {missing}")
+
+    def test_bundled_catalog_has_legacy_tags(self):
+        catalog = setup_config.load_models_catalog()
+        self.assertIn("legacy_tags", catalog)
+        self.assertIn("gemma4:e2b-it-qat", catalog["legacy_tags"])
+
+    def test_tiers_merged_from_catalog_keep_full_shape(self):
+        # Every tier dict must still carry both the catalog fields AND the
+        # Python-side tuning fields — same contract downstream code relies on.
+        for tier in setup_config.TIERS:
+            for key in ("gen_model", "reviewer_model", "label", "why", "speed",
+                        "min_ram_gb", "min_vram_gb", "ollama_timeout",
+                        "model_swap_delay", "num_predict", "item_counts"):
+                self.assertIn(key, tier, f"tier '{tier.get('name')}' missing '{key}' after merge")
+
+    def test_legacy_factory_models_derived_from_catalog(self):
+        catalog = setup_config.load_models_catalog()
+        expected = set(catalog["legacy_tags"])
+        for tier in catalog["tiers"].values():
+            expected.add(tier["gen_model"])
+            expected.add(tier["reviewer_model"])
+        self.assertEqual(setup_config.LEGACY_FACTORY_MODELS, expected)
+
+
+class TestRefreshCatalogBestEffort(unittest.TestCase):
+    """refresh_catalog_best_effort() is opt-in, never called from main()'s install
+    path, and must never raise or touch the bundled models_catalog.json — only
+    ever writes a separate online-cache file on success."""
+
+    def test_network_failure_never_raises(self):
+        with patch("setup_config.requests.get", side_effect=Exception("offline")):
+            try:
+                setup_config.refresh_catalog_best_effort()
+            except Exception as e:
+                self.fail(f"refresh_catalog_best_effort() raised on network failure: {e}")
+
+    def test_network_failure_does_not_touch_bundled_catalog(self):
+        original = setup_config._CATALOG_PATH.read_text(encoding="utf-8")
+        with patch("setup_config.requests.get", side_effect=Exception("offline")):
+            setup_config.refresh_catalog_best_effort()
+        self.assertEqual(setup_config._CATALOG_PATH.read_text(encoding="utf-8"), original)
+
+    def test_malformed_response_never_raises(self):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.side_effect = ValueError("not json")
+        with patch("setup_config.requests.get", return_value=mock_resp):
+            try:
+                setup_config.refresh_catalog_best_effort()
+            except Exception as e:
+                self.fail(f"refresh_catalog_best_effort() raised on malformed response: {e}")
+
+    def test_success_writes_separate_cache_file_not_bundled(self):
+        original_bundled = setup_config._CATALOG_PATH.read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_path = Path(tmpdir) / "models_catalog.online_cache.json"
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.json.return_value = {"models": [{"name": "some-new-model:1b"}]}
+            with patch("setup_config.requests.get", return_value=mock_resp), \
+                 patch("setup_config._ONLINE_CACHE_PATH", cache_path):
+                setup_config.refresh_catalog_best_effort()
+            self.assertTrue(cache_path.exists())
+        self.assertEqual(setup_config._CATALOG_PATH.read_text(encoding="utf-8"), original_bundled)
+
+    def test_missing_models_key_never_raises_and_does_not_write_cache(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_path = Path(tmpdir) / "models_catalog.online_cache.json"
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.json.return_value = {"foo": "bar"}  # Valid dict, but no "models" key
+            with patch("setup_config.requests.get", return_value=mock_resp), \
+                 patch("setup_config._ONLINE_CACHE_PATH", cache_path):
+                try:
+                    setup_config.refresh_catalog_best_effort()
+                except Exception as e:
+                    self.fail(f"refresh_catalog_best_effort() raised on missing 'models' key: {e}")
+            self.assertFalse(cache_path.exists(), "cache file should not be written when 'models' key is missing")
+
+
+class TestChooseModelInteractive(unittest.TestCase):
+    def test_falls_back_to_default_when_no_benchmark_choices(self):
+        tier = {"name": "minimal", "label": "Minimal", "gen_model": "qwen2.5:1.5b", "benchmark_choices": []}
+        with patch("builtins.input", return_value=""):
+            chosen = setup_config.choose_model_interactive(tier)
+        self.assertEqual(chosen, "qwen2.5:1.5b")
+
+    def test_picks_ranked_choice_by_number(self):
+        tier = {
+            "name": "minimal", "label": "Minimal", "gen_model": "qwen2.5:1.5b",
+            "benchmark_choices": [
+                {"tag": "qwen2.5:1.5b", "family": "qwen2.5", "intelligence_index": 18.2, "size_gb": 0.9},
+                {"tag": "phi4-mini:3.8b-q4_K_M", "family": "phi-4", "intelligence_index": 42.1, "size_gb": 2.5},
+            ],
+        }
+        with patch("builtins.input", return_value="2"):
+            chosen = setup_config.choose_model_interactive(tier)
+        self.assertEqual(chosen, "phi4-mini:3.8b-q4_K_M")
+
+    def test_blank_input_picks_top_ranked_choice(self):
+        tier = {
+            "name": "minimal", "label": "Minimal", "gen_model": "qwen2.5:1.5b",
+            "benchmark_choices": [
+                {"tag": "phi4-mini:3.8b-q4_K_M", "family": "phi-4", "intelligence_index": 42.1, "size_gb": 2.5},
+            ],
+        }
+        with patch("builtins.input", return_value=""):
+            chosen = setup_config.choose_model_interactive(tier)
+        self.assertEqual(chosen, "phi4-mini:3.8b-q4_K_M")
+
+    def test_invalid_input_falls_back_to_top_choice(self):
+        tier = {
+            "name": "minimal", "label": "Minimal", "gen_model": "qwen2.5:1.5b",
+            "benchmark_choices": [
+                {"tag": "phi4-mini:3.8b-q4_K_M", "family": "phi-4", "intelligence_index": 42.1, "size_gb": 2.5},
+            ],
+        }
+        with patch("builtins.input", return_value="not-a-number"):
+            chosen = setup_config.choose_model_interactive(tier)
+        self.assertEqual(chosen, "phi4-mini:3.8b-q4_K_M")
+
+
+class TestPrintConfigModels(unittest.TestCase):
+    def _write_cfg(self, tmpdir, gen_model, critic_model):
+        cfg_path = Path(tmpdir) / "config.yaml"
+        cfg_path.write_text(
+            f"llm:\n  model: {gen_model!r}\ncritic:\n  model: {critic_model!r}\n",
+            encoding="utf-8",
+        )
+        return cfg_path
+
+    def test_prints_valid_tags(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg_path = self._write_cfg(tmpdir, "phi4-mini:3.8b-q4_K_M", "qwen2.5:1.5b")
+            with patch("setup_config.CONFIG_PATH", cfg_path), \
+                 patch("builtins.print") as mock_print:
+                setup_config.print_config_models()
+            printed = [c.args[0] for c in mock_print.call_args_list]
+            self.assertEqual(printed, ["phi4-mini:3.8b-q4_K_M", "qwen2.5:1.5b"])
+
+    def test_refuses_tag_with_shell_metacharacters(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg_path = self._write_cfg(tmpdir, "x & powershell -enc AAAA", "qwen2.5:1.5b")
+            with patch("setup_config.CONFIG_PATH", cfg_path):
+                with self.assertRaises(SystemExit):
+                    setup_config.print_config_models()
+
+    def test_refuses_missing_config(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            missing = Path(tmpdir) / "does_not_exist.yaml"
+            with patch("setup_config.CONFIG_PATH", missing):
+                with self.assertRaises(SystemExit):
+                    setup_config.print_config_models()
+
+
+class TestApplyToConfigForceGenModel(unittest.TestCase):
+    def test_force_gen_model_overwrites_a_hand_set_tag(self):
+        # Regression test: a previous interactive pick (or any hand-typed tag)
+        # is not a "legacy factory default", so the normal protective rule
+        # would silently ignore a fresh interactive re-pick. force_gen_model=True
+        # is how choose_model_interactive()'s result reaches config.yaml.
+        base_cfg = {
+            "llm": {"base_url": "http://localhost:11434", "model": "some-hand-picked-tag:latest",
+                    "temperature": 0.2, "num_gpu": 1},
+            "critic": {"model": "qwen2.5:1.5b"},
+            "timeouts": {}, "pipeline": {"clauses": []}, "rag": {}, "paths": {},
+            "export": {}, "github": {},
+        }
+        import yaml
+        hw = {"ram_gb": 20, "vram_gb": 2, "cpu": "TestCPU", "os": "TestOS"}
+        tier = setup_config.select_tier(hw)
+        tier = dict(tier)
+        tier["gen_model"] = "newly-chosen-tag:latest"
+
+        with tempfile.NamedTemporaryFile(suffix=".yaml", mode="w", delete=False,
+                                          encoding="utf-8") as f:
+            yaml.dump(base_cfg, f)
+            tmp_path = Path(f.name)
+        original_path = setup_config.CONFIG_PATH
+        setup_config.CONFIG_PATH = tmp_path
+        try:
+            setup_config.apply_to_config(hw, tier, force_gen_model=True)
+            result = yaml.safe_load(tmp_path.read_text(encoding="utf-8"))
+        finally:
+            setup_config.CONFIG_PATH = original_path
+            tmp_path.unlink(missing_ok=True)
+        self.assertEqual(result["llm"]["model"], "newly-chosen-tag:latest")
+
+    def test_without_force_a_hand_set_tag_is_preserved(self):
+        base_cfg = {
+            "llm": {"base_url": "http://localhost:11434", "model": "some-hand-picked-tag:latest",
+                    "temperature": 0.2, "num_gpu": 1},
+            "critic": {"model": "qwen2.5:1.5b"},
+            "timeouts": {}, "pipeline": {"clauses": []}, "rag": {}, "paths": {},
+            "export": {}, "github": {},
+        }
+        import yaml
+        hw = {"ram_gb": 20, "vram_gb": 2, "cpu": "TestCPU", "os": "TestOS"}
+        tier = setup_config.select_tier(hw)
+        tier = dict(tier)
+        tier["gen_model"] = "auto-picked-tag:latest"
+
+        with tempfile.NamedTemporaryFile(suffix=".yaml", mode="w", delete=False,
+                                          encoding="utf-8") as f:
+            yaml.dump(base_cfg, f)
+            tmp_path = Path(f.name)
+        original_path = setup_config.CONFIG_PATH
+        setup_config.CONFIG_PATH = tmp_path
+        try:
+            setup_config.apply_to_config(hw, tier)  # force_gen_model defaults False
+            result = yaml.safe_load(tmp_path.read_text(encoding="utf-8"))
+        finally:
+            setup_config.CONFIG_PATH = original_path
+            tmp_path.unlink(missing_ok=True)
+        self.assertEqual(result["llm"]["model"], "some-hand-picked-tag:latest")
 
 
 if __name__ == "__main__":

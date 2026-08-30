@@ -1,0 +1,27 @@
+{
+  "families": [
+    {
+      "name": "qwen2.5",
+      "openrouter_match": ["qwen2.5", "qwen-2.5"],
+      "ollama_variants": [
+        {"tag": "qwen2.5:1.5b", "size_gb": 0.9, "min_ram_gb": 0, "min_vram_gb": 0},
+        {"tag": "qwen2.5:7b-instruct-q4_K_M", "size_gb": 4.7, "min_ram_gb": 8, "min_vram_gb": 6}
+      ]
+    },
+    {
+      "name": "gemma-3",
+      "openrouter_match": ["gemma-3", "gemma3"],
+      "ollama_variants": [
+        {"tag": "gemma3:4b-it-qat", "size_gb": 3.3, "min_ram_gb": 8, "min_vram_gb": 4},
+        {"tag": "gemma3:12b-it-qat", "size_gb": 8.9, "min_ram_gb": 0, "min_vram_gb": 12}
+      ]
+    },
+    {
+      "name": "llama-3.2",
+      "openrouter_match": ["llama-3.2", "llama3.2"],
+      "ollama_variants": [
+        {"tag": "llama3.2:3b-q4_K_M", "size_gb": 2.0, "min_ram_gb": 8, "min_vram_gb": 0}
+      ]
+    }
+  ]
+}

@@ -17,6 +17,15 @@ import requests
 import streamlit as st
 import yaml
 
+import httpx
+from pydantic_ai import Agent, NativeOutput
+from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError, UnexpectedModelBehavior
+from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.providers.openai import OpenAIProvider
+from pydantic_ai.settings import ModelSettings
+
+from schemas.org_profile import OrgProfile, PersonnelEntry
+
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
@@ -379,6 +388,20 @@ def get_review_assessment(cid):
 def get_review_text(cid):
     f = OUTPUTS_DIR / f"{cid}.critic.md"
     return f.read_text(encoding="utf-8", errors="replace") if f.exists() else None
+
+def get_review_verdict(cid):
+    """Typed AI Reviewer result, if available (written alongside .critic.md since the
+    pydantic-ai migration). Returns None for clauses not yet reviewed or reviewed
+    before the migration (no .critic.json sidecar) — callers should fall back to
+    get_review_text() + regex-free display in that case."""
+    from schemas.review import ReviewVerdict
+    f = OUTPUTS_DIR / f"{cid}.critic.json"
+    if not f.exists():
+        return None
+    try:
+        return ReviewVerdict.model_validate_json(f.read_text(encoding="utf-8"))
+    except Exception:
+        return None
 
 def read_output(cid):
     f = OUTPUTS_DIR / f"{cid}.md"
@@ -969,13 +992,24 @@ ORG_JSON_SCHEMA = {
 }
 
 
-def extract_org_with_llm(text, cfg):
-    schema_str = json.dumps(ORG_JSON_SCHEMA, indent=2)
+def _build_extraction_agent(cfg, output_type, num_predict, timeout):
+    if not cfg["llm"]["base_url"]:
+        raise ValueError(
+            "_build_extraction_agent: base_url is empty — refusing to let the OpenAI SDK "
+            "fall back to its default (https://api.openai.com)."
+        )
+    provider = OpenAIProvider(base_url=f"{cfg['llm']['base_url']}/v1", api_key="ollama")
+    model = OpenAIChatModel(
+        cfg["llm"]["model"],
+        provider=provider,
+        settings=ModelSettings(temperature=0.05, max_tokens=num_predict, timeout=timeout),
+    )
+    return Agent(model, output_type=NativeOutput(output_type))
+
+
+def _extract_org_agent_call(text, cfg) -> OrgProfile:
+    """Pure agent call, no Streamlit — testable in isolation."""
     prompt = f"""You are an ISO 27001 consultant. Extract organization information from the document below.
-
-Return ONLY a valid JSON object with this exact structure — no explanation, no markdown fences:
-
-{schema_str}
 
 Rules:
 - "scope": 1–2 sentences describing the core business and IT activities suitable for an ISMS scope statement
@@ -984,14 +1018,16 @@ Rules:
 - "regulatory_drivers": regulations or standards driving ISMS (e.g. ["GDPR", "NIS2", "TISAX"])
 - "legal_basis": include only regulations explicitly mentioned in the document — do NOT invent
 - "existing_controls": list specific security controls mentioned (MFA, VPN, firewalls, encryption, etc.)
-- Leave fields as empty string or empty array when not found in the document
+- Leave fields as empty string or empty list when not found in the document
 - Do NOT invent information
 
 DOCUMENT:
-{text[:5000]}
+{text[:5000]}"""
+    agent = _build_extraction_agent(cfg, OrgProfile, num_predict=1500, timeout=300)
+    return agent.run_sync(prompt).output
 
-JSON:"""
 
+def extract_org_with_llm(text, cfg):
     try:
         requests.get(f"{cfg['llm']['base_url']}/api/tags", timeout=5)
     except Exception:
@@ -1000,69 +1036,51 @@ JSON:"""
         return None
 
     try:
-        resp = requests.post(
-            f"{cfg['llm']['base_url']}/api/generate",
-            json={"model": cfg["llm"]["model"], "prompt": prompt, "stream": False,
-                  "options": {"temperature": 0.05, "num_predict": 1500}},
-            timeout=300,
-        )
-        raw = resp.json().get("response", "").strip()
-        start, end = raw.find("{"), raw.rfind("}") + 1
-        if start >= 0 and end > start:
-            return json.loads(raw[start:end])
-        st.error("The AI returned an unexpected response. "
-                 "Try uploading a shorter or plain-text (.txt) version of your document.")
-    except requests.exceptions.Timeout:
+        return _extract_org_agent_call(text, cfg).model_dump()
+    except httpx.TimeoutException:
         st.error(
-            "The AI engine is taking too long (3 minute limit reached). "
+            "The AI engine is taking too long (timeout reached). "
             "This usually means the model is still loading into memory. "
             "Wait 1–2 minutes, then try again — it will be faster on the second attempt."
         )
-    except requests.exceptions.ConnectionError:
+    except (httpx.ConnectError, ModelAPIError):
         st.error("Cannot reach the AI engine. "
                  "Go to Organization > AI Engine and check that Ollama is running.")
-    except json.JSONDecodeError:
-        st.error("Unexpected AI response format. "
-                 "Try uploading a shorter or simpler document (plain text works best).")
+    except UnexpectedModelBehavior:
+        st.error("The AI returned an unexpected response. "
+                 "Try uploading a shorter or plain-text (.txt) version of your document.")
+    except ModelHTTPError as e:
+        st.error(f"AI engine error: {e}. Try again in a moment.")
     except Exception as e:
         st.error(f"Extraction error: {e}")
     return None
 
 
-def extract_personnel_with_llm(text, cfg):
-    """Extract key personnel names and roles from an org chart or document."""
+def _extract_personnel_agent_call(text, cfg) -> list[PersonnelEntry]:
+    """Pure agent call, no Streamlit — testable in isolation."""
     prompt = f"""You are an ISO 27001 consultant. Extract key personnel information from the document below.
-
-Return ONLY a valid JSON array — no explanation, no markdown fences:
-[
-  {{"role": "CEO", "name": "Full Name"}},
-  {{"role": "CISO", "name": "Full Name"}}
-]
 
 Rules:
 - Include only named individuals with clear roles
 - Roles should map to information security governance (CEO, CISO, IT Manager, Risk Owner, DPO, etc.)
-- Return an empty array [] if no clear personnel found
+- Return an empty list if no clear personnel found
 - Do NOT invent names
+- Keep role and name in separate fields — never combine them into one string
 
 DOCUMENT:
-{text[:3000]}
+{text[:3000]}"""
+    agent = _build_extraction_agent(cfg, list[PersonnelEntry], num_predict=300, timeout=120)
+    return agent.run_sync(prompt).output
 
-JSON:"""
+
+def extract_personnel_with_llm(text, cfg):
+    """Extract key personnel names and roles from an org chart or document."""
     try:
-        resp = requests.post(
-            f"{cfg['llm']['base_url']}/api/generate",
-            json={"model": cfg["llm"]["model"], "prompt": prompt, "stream": False,
-                  "options": {"temperature": 0.05, "num_predict": 300}},
-            timeout=120,
-        )
-        raw = resp.json().get("response", "").strip()
-        start, end = raw.find("["), raw.rfind("]") + 1
-        if start >= 0 and end > start:
-            return json.loads(raw[start:end])
+        entries = _extract_personnel_agent_call(text, cfg)
+        return [e.model_dump() for e in entries]
     except Exception as e:
         st.error(f"Personnel extraction error: {e}")
-    return None
+        return None
 
 
 # ---------------------------------------------------------------------------

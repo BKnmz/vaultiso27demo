@@ -8,15 +8,20 @@ Console strings are ASCII-only on purpose: install.bat runs in a cp1252 console
 that cannot print Unicode arrows/box-drawing without crashing.
 """
 import argparse
+import json
 import platform
+import re
 import subprocess
 import sys
 from pathlib import Path
 
+import requests
 import yaml
 
 BASE_DIR = Path(__file__).parent
 CONFIG_PATH = BASE_DIR / "config.yaml"
+_CATALOG_PATH = BASE_DIR / "models_catalog.json"
+_ONLINE_CACHE_PATH = BASE_DIR / "models_catalog.online_cache.json"
 
 # ---------------------------------------------------------------------------
 # Hardware tiers - ordered best to worst, first match wins (see select_tier).
@@ -25,20 +30,22 @@ CONFIG_PATH = BASE_DIR / "config.yaml"
 # VRAM; a model spilled to CPU runs 5-10x slower, so low-VRAM machines get a
 # small fast generator - never a big spilling one. RAM alone never qualifies
 # for a big model (32 GB RAM + no GPU still generates at CPU speed).
+#
+# Model identity (gen_model/reviewer_model/label/why/speed) lives in
+# models_catalog.json, a bundled+versioned JSON file — this keeps the model
+# picks maintainer-updatable without touching this module. Hardware-tuning
+# fields below (thresholds, timeouts, output length) stay in Python since
+# they're install-time behavior decisions tightly coupled to this codebase,
+# not model facts.
 # ---------------------------------------------------------------------------
-TIERS = [
+_TIER_TUNING = [
     {
         "name":              "high",
-        "label":             "High-end (12 GB+ VRAM)",
         "min_ram_gb":        0,
         "min_vram_gb":       12,
         "ollama_timeout":    120,
         "model_swap_delay":  2,
-        "gen_model":         "gemma4:12b-it-qat",
-        "reviewer_model":    "qwen2.5:1.5b",
         "num_gpu":           1,
-        "why":               "12 GB+ VRAM fits a 7.2 GB generator fully on the GPU.",
-        "speed":             "~1-2 min per document",
         "num_predict":       2000,
         "length_profile":    "comprehensive (~1200-1800 words)",
         "item_counts": {
@@ -50,16 +57,11 @@ TIERS = [
     },
     {
         "name":              "mid",
-        "label":             "Mid-range (6-12 GB VRAM)",
         "min_ram_gb":        0,
         "min_vram_gb":       6,
         "ollama_timeout":    240,
         "model_swap_delay":  4,
-        "gen_model":         "gemma4:e4b-it-qat",
-        "reviewer_model":    "qwen2.5:1.5b",
         "num_gpu":           1,
-        "why":               "6-12 GB VRAM fits a 6.1 GB generator on the GPU.",
-        "speed":             "~2-4 min per document",
         "num_predict":       2000,
         "length_profile":    "comprehensive (~1200-1800 words)",
         "item_counts": {
@@ -71,17 +73,11 @@ TIERS = [
     },
     {
         "name":              "cpu_rich",
-        "label":             "CPU-rich (16 GB+ RAM, < 6 GB VRAM)",
         "min_ram_gb":        16,
         "min_vram_gb":       0,
         "ollama_timeout":    600,
         "model_swap_delay":  12,
-        "gen_model":         "phi4-mini:3.8b-q4_K_M",
-        "reviewer_model":    "qwen2.5:1.5b",
         "num_gpu":           1,
-        "why":               "Plenty of RAM but the GPU is too small for a big model; "
-                             "a small fast generator on CPU beats a big one spilling.",
-        "speed":             "~8-15 min per document",
         "num_predict":       1200,
         "length_profile":    "concise but complete (~500-800 words)",
         "item_counts": {
@@ -93,16 +89,11 @@ TIERS = [
     },
     {
         "name":              "low",
-        "label":             "Standard (8-16 GB RAM)",
         "min_ram_gb":        8,
         "min_vram_gb":       0,
         "ollama_timeout":    900,
         "model_swap_delay":  16,
-        "gen_model":         "phi4-mini:3.8b-q4_K_M",
-        "reviewer_model":    "qwen2.5:1.5b",
         "num_gpu":           1,
-        "why":               "Limited RAM; a 2.5 GB generator is the safe fit.",
-        "speed":             "~10-20 min per document",
         "num_predict":       1200,
         "length_profile":    "concise but complete (~500-800 words)",
         "item_counts": {
@@ -114,16 +105,11 @@ TIERS = [
     },
     {
         "name":              "minimal",
-        "label":             "Minimal (< 8 GB RAM, CPU-only)",
         "min_ram_gb":        0,
         "min_vram_gb":       0,
         "ollama_timeout":    900,
         "model_swap_delay":  20,
-        "gen_model":         "qwen2.5:1.5b",
-        "reviewer_model":    "qwen2.5:1.5b",
         "num_gpu":           0,
-        "why":               "Very low RAM; the smallest model is the only safe choice.",
-        "speed":             "~5-10 min per document",
         "num_predict":       1000,
         "length_profile":    "concise (~400-600 words)",
         "item_counts": {
@@ -135,17 +121,80 @@ TIERS = [
     },
 ]
 
-# Factory model tags that apply_to_config() is allowed to overwrite on
-# re-detection. Includes current tier models PLUS every model shipped by an
-# earlier factory default (v0.4.1 gemma4 tags, the older phi4/mistral/llama
-# set) so an install that picked an old default migrates cleanly. A tag a
-# user typed by hand is NOT in this set and is left untouched.
-LEGACY_FACTORY_MODELS = {
-    # current (v0.4.2)
-    "gemma4:12b-it-qat", "gemma4:e4b-it-qat", "phi4-mini:3.8b-q4_K_M", "qwen2.5:1.5b",
-    # v0.4.1 briefly-shipped tags
-    "gemma4:e2b-it-qat", "mistral:7b-q4_K_M", "llama3.2:3b-q4_K_M",
-}
+
+def load_models_catalog(path=None):
+    """Load the bundled (or an override) models catalog JSON."""
+    p = Path(path) if path else _CATALOG_PATH
+    with open(p, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _build_tiers(catalog=None):
+    """Merge _TIER_TUNING (Python, hardware behavior) with models_catalog.json
+    (model identity) into the full tier dicts the rest of this module expects."""
+    catalog = catalog if catalog is not None else load_models_catalog()
+    tiers = []
+    for tuning in _TIER_TUNING:
+        try:
+            entry = catalog["tiers"][tuning["name"]]
+        except KeyError:
+            raise KeyError(
+                f"_TIER_TUNING has a tier named '{tuning['name']}' but models_catalog.json "
+                f"has no matching entry under \"tiers\". These two files must stay in "
+                f"lockstep — add '{tuning['name']}' to models_catalog.json's \"tiers\", or "
+                f"remove/rename the _TIER_TUNING entry to match."
+            ) from None
+        merged = dict(tuning)
+        merged.update({
+            "gen_model": entry["gen_model"],
+            "reviewer_model": entry["reviewer_model"],
+            "label": entry["label"],
+            "why": entry["why"],
+            "speed": entry["speed"],
+        })
+        tiers.append(merged)
+    return tiers
+
+
+def _build_legacy_factory_models(catalog=None):
+    """Factory model tags that apply_to_config() is allowed to overwrite on
+    re-detection: current tier models plus every models_catalog.json legacy_tags
+    entry (older factory defaults, appended over time, never removed) — so an
+    install that picked an old default migrates cleanly. A tag a user typed by
+    hand is NOT in this set and is left untouched."""
+    catalog = catalog if catalog is not None else load_models_catalog()
+    tags = set(catalog.get("legacy_tags", []))
+    for entry in catalog["tiers"].values():
+        tags.add(entry["gen_model"])
+        tags.add(entry["reviewer_model"])
+    return tags
+
+
+def refresh_catalog_best_effort():
+    """Opt-in, manual-only (CLI --refresh-catalog), never called from install's
+    default path. Best-effort GET to a public Ollama model index; on ANY failure
+    (offline, timeout, malformed response, unexpected schema) this is a silent
+    no-op — never raises, never touches the bundled models_catalog.json. On
+    success, writes an informational cache file only; does not alter TIERS
+    or LEGACY_FACTORY_MODELS for the current process."""
+    try:
+        resp = requests.get("https://ollamadb.dev/api/v1/models", timeout=5)
+        if resp.status_code != 200:
+            return
+        data = resp.json()
+        if not isinstance(data, dict) or "models" not in data:
+            return
+        _ONLINE_CACHE_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        print(f"  [OK] Online model index cached to {_ONLINE_CACHE_PATH.name} "
+              "(informational only — config.yaml is unaffected).")
+    except Exception:
+        pass  # advisory only — never block or fail install on this
+
+
+_catalog = load_models_catalog()
+TIERS = _build_tiers(_catalog)
+LEGACY_FACTORY_MODELS = _build_legacy_factory_models(_catalog)
+del _catalog
 
 
 # ---------------------------------------------------------------------------
@@ -309,8 +358,16 @@ def select_tier(hw: dict) -> dict:
     return dict(TIERS[-1])  # fallback: minimal
 
 
-def apply_to_config(hw: dict, tier: dict) -> None:
-    """Write hardware-calibrated defaults into config.yaml."""
+def apply_to_config(hw: dict, tier: dict, force_gen_model: bool = False) -> None:
+    """Write hardware-calibrated defaults into config.yaml.
+
+    force_gen_model: set True only when tier["gen_model"] just came out of an
+    explicit, interactive choice in this same run (choose_model_interactive())
+    - that choice should always win. Leave False for any non-interactive/
+    automatic call (e.g. launch.py's silent auto-repair subprocess), where the
+    normal protective rule applies: never clobber a tag the user typed by hand
+    or picked on a previous run.
+    """
     if not CONFIG_PATH.exists():
         print(f"  ERROR: config.yaml not found at {CONFIG_PATH}")
         sys.exit(1)
@@ -323,8 +380,10 @@ def apply_to_config(hw: dict, tier: dict) -> None:
     cfg.setdefault("timeouts", {})
 
     # Only overwrite model tags that are still a (current or legacy) factory
-    # default - never clobber a tag the user typed by hand.
-    if cfg["llm"].get("model", "") in LEGACY_FACTORY_MODELS or not cfg["llm"].get("model"):
+    # default - never clobber a tag the user typed by hand. force_gen_model
+    # bypasses this for the generator tag only (an explicit choice this run),
+    # not the reviewer tag (never interactively chosen).
+    if force_gen_model or cfg["llm"].get("model", "") in LEGACY_FACTORY_MODELS or not cfg["llm"].get("model"):
         cfg["llm"]["model"] = tier["gen_model"]
     if cfg["critic"].get("model", "") in LEGACY_FACTORY_MODELS or not cfg["critic"].get("model"):
         cfg["critic"]["model"] = tier["reviewer_model"]
@@ -357,6 +416,37 @@ def print_models():
     tier = select_tier(detect_hardware())
     print(tier["gen_model"])
     print(tier["reviewer_model"])
+
+
+# Ollama tags are colon/dot/dash/underscore-separated alphanumerics
+# (e.g. "phi4-mini:3.8b-q4_K_M") - never shell metacharacters. Anything outside
+# this set is refused rather than handed back to install.bat's `ollama pull`,
+# which interpolates the tag into an unquoted batch command.
+_SAFE_MODEL_TAG = re.compile(r"^[A-Za-z0-9._:-]+$")
+
+
+def print_config_models():
+    """Print config.yaml's current llm.model + critic.model, one per line, for
+    install.bat to capture after apply_to_config() has already run. Reads
+    CONFIG_PATH directly (this module already knows its own directory) instead
+    of install.bat splicing its %SCRIPT_DIR% into an inline `python -c` string
+    literal - avoids both the path-injection risk of that approach and a second
+    hardware-detection pass. Refuses (prints nothing, exits 1) if either stored
+    tag contains anything outside the safe Ollama-tag charset, so a tampered or
+    hand-edited config.yaml can never reach `ollama pull` unvalidated."""
+    if not CONFIG_PATH.exists():
+        sys.exit(1)
+    with open(CONFIG_PATH, encoding="utf-8") as f:
+        cfg = yaml.safe_load(f) or {}
+    gen_model = cfg.get("llm", {}).get("model", "")
+    rev_model = cfg.get("critic", {}).get("model", "")
+    if not _SAFE_MODEL_TAG.match(gen_model) or not _SAFE_MODEL_TAG.match(rev_model):
+        print(f"  ERROR: config.yaml model tag contains unexpected characters "
+              f"(gen={gen_model!r}, reviewer={rev_model!r}) - refusing to print.",
+              file=sys.stderr)
+        sys.exit(1)
+    print(gen_model)
+    print(rev_model)
 
 
 def detect_main():
@@ -395,7 +485,41 @@ def detect_main():
     print("  (Use setup_config.py without --detect to apply these settings to config.yaml)")
 
 
-def main():
+def choose_model_interactive(tier: dict) -> str:
+    """Present up to 3 benchmark-ranked choices for this tier and return the
+    chosen Ollama tag. Falls back to the tier's single default if there are
+    no benchmark_choices (fetch never ran, or ranking found nothing that fits)."""
+    choices = tier.get("benchmark_choices") or []
+    if not choices:
+        return tier["gen_model"]
+
+    print()
+    print(f"  Ranked model choices for {tier['label']}:")
+    for i, c in enumerate(choices, start=1):
+        print(f"    [{i}] {c['tag']}  (family: {c['family']}, "
+              f"intelligence_index: {c['intelligence_index']:.1f}, {c['size_gb']} GB)")
+    print(f"  Press Enter for the top-ranked choice ([1]).")
+    raw = input("  Choice: ").strip()
+    if not raw:
+        return choices[0]["tag"]
+    try:
+        idx = int(raw)
+        if 1 <= idx <= len(choices):
+            return choices[idx - 1]["tag"]
+    except ValueError:
+        pass
+    print(f"  Invalid choice - using top-ranked: {choices[0]['tag']}")
+    return choices[0]["tag"]
+
+
+def main(interactive: bool = True):
+    """interactive=True (install.bat's explicit `python setup_config.py` call)
+    prompts for a ranked model choice via choose_model_interactive() and that
+    choice always wins in config.yaml. interactive=False (launch.py's silent
+    background auto-repair subprocess - see check_hardware_config()) never
+    calls input(), auto-picks the top-ranked benchmark choice (or the tier
+    default if none), and leaves apply_to_config()'s normal protective
+    "don't clobber a hand-set tag" rule in effect."""
     print()
     print("  Detecting hardware...")
     hw = detect_hardware()
@@ -405,16 +529,33 @@ def main():
     print(f"  OS   : {hw['os']}")
 
     tier = select_tier(hw)
+
+    from catalog.refresh_model_catalog import refresh as refresh_benchmark_catalog
+    try:
+        refresh_benchmark_catalog(force=False)
+        catalog = load_models_catalog()
+        tier["benchmark_choices"] = catalog["tiers"].get(tier["name"], {}).get("benchmark_choices", [])
+    except Exception:
+        pass  # silent fallback per spec - proceed with whatever tier already has
+
     print()
     print(f"  Hardware tier : {tier['label']}")
     print(f"  Why           : {tier['why']}")
-    print(f"  Gen model     : {tier['gen_model']}")
     print(f"  Reviewer      : {tier['reviewer_model']}")
     print(f"  Expected speed: {tier['speed']}")
     print(f"  Ollama timeout: {tier['ollama_timeout']}s")
     print(f"  Swap delay    : {tier['model_swap_delay']}s")
 
-    apply_to_config(hw, tier)
+    if interactive:
+        chosen_gen_model = choose_model_interactive(tier)
+    else:
+        choices = tier.get("benchmark_choices") or []
+        chosen_gen_model = choices[0]["tag"] if choices else tier["gen_model"]
+    tier = dict(tier)
+    tier["gen_model"] = chosen_gen_model
+    print(f"  Gen model     : {tier['gen_model']}")
+
+    apply_to_config(hw, tier, force_gen_model=interactive)
     print()
     print("  [OK]  config.yaml updated with hardware-calibrated settings")
 
@@ -429,10 +570,52 @@ if __name__ == "__main__":
         "--detect", action="store_true",
         help="Print full hardware diagnostics (RAM, per-GPU VRAM list, tier) without writing config.yaml.",
     )
+    parser.add_argument(
+        "--refresh-catalog", action="store_true",
+        help="Best-effort check for newer model tags against a public index. Never touches "
+             "models_catalog.json or config.yaml; writes an informational cache file only.",
+    )
+    parser.add_argument(
+        "--refresh-benchmarks", action="store_true",
+        help="Force a benchmark-ranked catalog refresh (OpenRouter intelligence_index) "
+             "regardless of the 90-day cache, then exit. Requires OPENROUTER_API_KEY.",
+    )
+    parser.add_argument(
+        "--choose-model", action="store_true",
+        help="Detect hardware, print ranked choices, prompt for a pick, print the chosen "
+             "tag alone on stdout (for install.bat to capture). Does not write config.yaml.",
+    )
+    parser.add_argument(
+        "--print-config-models", action="store_true",
+        help="Print config.yaml's current llm.model + critic.model (one per line) after "
+             "main() has already run and applied them - for install.bat to capture without "
+             "a second hardware-detection pass. Validates each tag against a safe Ollama-tag "
+             "charset first and refuses (exit 1) rather than print anything unexpected.",
+    )
+    parser.add_argument(
+        "--non-interactive", action="store_true",
+        help="With no other flag: run the normal detect+configure flow without prompting - "
+             "auto-picks the top-ranked benchmark choice instead of asking. Used by "
+             "launch.py's silent background auto-repair; never used by install.bat.",
+    )
     args = parser.parse_args()
     if args.print_models:
         print_models()
     elif args.detect:
         detect_main()
+    elif args.refresh_catalog:
+        refresh_catalog_best_effort()
+    elif args.refresh_benchmarks:
+        from catalog.refresh_model_catalog import refresh as refresh_benchmark_catalog
+        changed = refresh_benchmark_catalog(force=True)
+        print("Benchmark catalog refreshed." if changed
+              else "Refresh failed or skipped - see above for details, cache left untouched.")
+    elif args.choose_model:
+        tier = select_tier(detect_hardware())
+        catalog = load_models_catalog()
+        tier["benchmark_choices"] = catalog["tiers"].get(tier["name"], {}).get("benchmark_choices", [])
+        print(choose_model_interactive(tier))
+    elif args.print_config_models:
+        print_config_models()
     else:
-        main()
+        main(interactive=not args.non_interactive)

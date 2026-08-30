@@ -559,7 +559,10 @@ def regenerate_with_user_notes(clause_id, cfg, org):
     auto_clauses = cfg.get("critic", {}).get("auto_clauses", [])
     if cfg.get("critic", {}).get("enabled") and clause_id in auto_clauses:
         log.info("[USER-REGEN] %s — running AI Reviewer on revised draft", clause_id)
-        run_revision_loop(clause_id, cfg, org, out_file, max_revisions=1)
+        try:
+            run_revision_loop(clause_id, cfg, org, out_file, max_revisions=1)
+        except Exception as e:
+            log.error("[CRITIC ERROR] %s: %s", clause_id, e)
 
     log.info("[USER-REGEN] %s — done", clause_id)
     return True, "Document regenerated using your reviewer notes."

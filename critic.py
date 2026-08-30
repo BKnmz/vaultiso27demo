@@ -14,13 +14,22 @@ import json
 import logging
 import os
 import sys
+import time
 from pathlib import Path
 
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 os.environ.setdefault("HF_DATASETS_OFFLINE", "1")
 
-import requests
 import yaml
+
+from pydantic_ai import Agent, NativeOutput
+from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError, UnexpectedModelBehavior
+from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.providers.openai import OpenAIProvider
+from pydantic_ai.settings import ModelSettings
+
+from adapters.review_markdown import verdict_to_markdown
+from schemas.review import ReviewVerdict
 
 if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -190,41 +199,61 @@ def load_org(path):
         return json.load(f)
 
 
-def call_ollama(base_url, model, prompt, temperature=0.1, timeout=600):
-    import time
-    url = f"{base_url}/api/generate"
-    payload = {
-        "model": model,
-        "prompt": prompt,
-        "stream": False,
-        "options": {
-            "temperature": temperature,
-            "num_predict": 1000,
-            "num_ctx": 6144,
-        },
-    }
+def run_reviewer_agent(base_url, model, prompt, temperature=0.1, timeout=600):
+    """
+    Call the AI Reviewer via pydantic-ai, pointed at local Ollama's OpenAI-compatible
+    endpoint (never a real cloud API — base_url always resolves to config's llm.base_url).
+
+    Uses NativeOutput to force Ollama's grammar-constrained decoding (format=json_schema)
+    rather than pydantic-ai's default tool-calling structured-output mode — confirmed
+    empirically that qwen2.5:1.5b exhausts its output retries under tool-calling mode but
+    succeeds first-try under NativeOutput, since the schema constraint is enforced at the
+    token level regardless of the model's tool-calling reliability.
+
+    api_key is always the hardcoded literal "ollama" — never read from OPENAI_API_KEY or
+    any environment variable, so a real key set on the dev machine for an unrelated project
+    can never combine with a misconfigured base_url to send a real, billed cloud request.
+
+    Returns a ReviewVerdict. Raises ValueError if base_url is empty (fail loud rather than
+    let the OpenAI SDK silently fall back to https://api.openai.com). Raises SystemExit on
+    connection failure, RuntimeError on a persistent server error.
+    """
+    if not base_url:
+        raise ValueError(
+            "run_reviewer_agent: base_url is empty — refusing to let the OpenAI SDK "
+            "fall back to its default (https://api.openai.com)."
+        )
+    provider = OpenAIProvider(base_url=f"{base_url}/v1", api_key="ollama")
+    pyd_model = OpenAIChatModel(
+        model,
+        provider=provider,
+        settings=ModelSettings(temperature=temperature, timeout=timeout),
+    )
+    agent = Agent(pyd_model, output_type=NativeOutput(ReviewVerdict))
+
     for attempt in range(1, 3):
         try:
-            resp = requests.post(url, json=payload, timeout=timeout)
-            resp.raise_for_status()
-            return resp.json().get("response", "").strip()
-        except requests.exceptions.HTTPError as e:
-            if attempt == 1 and getattr(e.response, "status_code", 0) == 500:
+            result = agent.run_sync(prompt)
+            return result.output
+        except ModelHTTPError as e:
+            if attempt == 1 and e.status_code == 500:
                 # Ollama 500 = model swap not yet complete; wait and retry once
                 log.warning("[CRITIC] Ollama 500 on attempt %d — waiting 12s for model swap, retrying...", attempt)
                 time.sleep(12)
                 continue
             raise RuntimeError(f"Ollama server error: {e}")
-        except requests.exceptions.ReadTimeout:
-            raise RuntimeError(
-                f"Ollama timed out after {timeout}s (model: {model}). "
-                "Model may still be loading. Wait 1-2 minutes and try again."
-            )
-        except requests.exceptions.ConnectionError:
+        except ModelAPIError as e:
             raise SystemExit(
                 f"\nERROR: Cannot connect to Ollama at {base_url}\n"
                 "Make sure Ollama is running: 'ollama serve'"
-            )
+            ) from e
+        except UnexpectedModelBehavior as e:
+            # Model emitted syntactically valid but schema-invalid output (e.g. a
+            # duplicated ReviewVerdict dimension) and exhausted pydantic-ai's own
+            # output-retries. Not a ModelHTTPError/ModelAPIError sibling - convert
+            # to RuntimeError so every caller's existing except RuntimeError path
+            # (pipeline.py, ui/_pages/review.py) handles it the same as a server error.
+            raise RuntimeError(f"AI Reviewer returned invalid output: {e}") from e
     raise RuntimeError("Ollama failed after 2 attempts.")
 
 
@@ -263,7 +292,11 @@ def get_rag_context_for_critic(clause_id, cfg):
 
 
 def parse_overall_assessment(critic_output):
-    """Extract the overall assessment from critic markdown output."""
+    """Extract the overall assessment from critic markdown output.
+
+    Legacy-format shim: only used as a fallback when reading a cached .critic.md
+    written before the pydantic-ai migration (no .critic.json sidecar present).
+    """
     for line in critic_output.splitlines():
         if "**Overall Assessment:**" in line:
             # Model echoed the literal placeholder instead of deciding — surface as a
@@ -289,12 +322,13 @@ def parse_overall_assessment(critic_output):
 def run_critic(clause_id, cfg, org, force=False):
     """
     Run adversarial critic on a generated clause document.
-    Saves result to outputs/<clause_id>.critic.md
+    Saves result to outputs/<clause_id>.critic.md and outputs/<clause_id>.critic.json
     Returns (assessment, critic_text) or (None, None) if skipped.
     """
     outputs_dir = Path(cfg["paths"]["outputs"])
     doc_file = outputs_dir / f"{clause_id}.md"
     critic_file = outputs_dir / f"{clause_id}.critic.md"
+    critic_json_file = outputs_dir / f"{clause_id}.critic.json"
 
     if not doc_file.exists():
         log.warning("[SKIP] No generated document found for clause %s", clause_id)
@@ -302,9 +336,16 @@ def run_critic(clause_id, cfg, org, force=False):
 
     if not force and critic_file.exists():
         log.info("[CACHED] Critic review already exists for %s", clause_id)
-        return parse_overall_assessment(
-            critic_file.read_text(encoding="utf-8")
-        ), critic_file.read_text(encoding="utf-8")
+        cached_md = critic_file.read_text(encoding="utf-8")
+        if critic_json_file.exists():
+            try:
+                cached_verdict = ReviewVerdict.model_validate_json(
+                    critic_json_file.read_text(encoding="utf-8")
+                )
+                return cached_verdict.overall_assessment, cached_md
+            except Exception:
+                pass  # fall through to legacy markdown parse
+        return parse_overall_assessment(cached_md), cached_md
 
     document = doc_file.read_text(encoding="utf-8", errors="replace")
     clause_name = CLAUSE_NAMES.get(clause_id, clause_id)
@@ -330,11 +371,16 @@ def run_critic(clause_id, cfg, org, force=False):
     ollama_timeout = cfg.get("timeouts", {}).get("ollama_generate", 600)
 
     log.info("[CRITIC] %s — %s", clause_id, clause_name)
-    result = call_ollama(cfg["llm"]["base_url"], critic_model, prompt, critic_temp, timeout=ollama_timeout)
-    assessment = parse_overall_assessment(result)
+    verdict = run_reviewer_agent(cfg["llm"]["base_url"], critic_model, prompt, critic_temp, timeout=ollama_timeout)
+    # Overwrite clause identity from known values rather than trusting the model's echo —
+    # same anti-hallucination principle used elsewhere in this codebase.
+    verdict = verdict.model_copy(update={"clause_id": clause_id, "clause_name": clause_name})
+    assessment = verdict.overall_assessment
+    result = verdict_to_markdown(verdict)
     log.info("[CRITIC RESULT] %s → %s", clause_id, assessment)
 
     critic_file.write_text(result, encoding="utf-8")
+    critic_json_file.write_text(verdict.model_dump_json(indent=2), encoding="utf-8")
     return assessment, result
 
 
