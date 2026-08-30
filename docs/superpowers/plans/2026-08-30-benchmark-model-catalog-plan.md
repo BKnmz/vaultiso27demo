@@ -31,7 +31,7 @@
 - Consumes: nothing from this plan.
 - Produces: `models_catalog.json` at repo root (schema: `{"catalog_version": str, "tiers": {tier_name: {gen_model, reviewer_model, label, why, speed}}, "legacy_tags": [str]}`), `setup_config.py`'s `_TIER_TUNING` + `load_models_catalog()` + `merge_tiers()`-equivalent (exact function name confirmed in Task 2, Step 1), which every later task in this plan builds on.
 
-- [ ] **Step 1: Re-run the devsecops checkpoint on the worktree branch**
+- [x] **Step 1: Re-run the devsecops checkpoint on the worktree branch**
 
 ```bash
 cd "C:\ClaudeData\4_ISMS_Automation\vaultiso-demo\.claude\worktrees\pydantic-ai-catalog-port"
@@ -40,11 +40,19 @@ python -m pytest tests/ -q
 ```
 Expected: all 14 commits listed, full test suite green. If red, fix on the worktree branch, commit, re-run until green — do not proceed to merge on a red suite.
 
-- [ ] **Step 2: Run `/code-review` and `/security-review` against the worktree branch's diff vs `main`**
+- [x] **Step 2: Run `/code-review` and `/security-review` against the worktree branch's diff vs `main`**
+
+Ran both. code-review found 6 real findings (uncaught `UnexpectedModelBehavior` crash risk
+in `critic.py`/`pipeline.py`, collapsed error messages in `ui/core.py`, dead `call_ollama()`
+code, redundant catalog double-load, unhelpful `KeyError` on tier mismatch) — all fixed,
+committed, re-verified at 170/170 green. security-review found nothing above 0.7 confidence
+— confirmed the offline-invariant hardening (hardcoded `api_key="ollama"`, fail-loud empty
+`base_url` guard before any provider construction) is correctly implemented everywhere it
+applies.
 
 Use the `code-review` skill and `security-review` skill (both already available) against `main..worktree-pydantic-ai-catalog-port`. Fix any CONFIRMED findings on the worktree branch, re-run Step 1 after each fix.
 
-- [ ] **Step 3: Merge to main**
+- [x] **Step 3: Merge to main**
 
 ```bash
 cd "C:\ClaudeData\4_ISMS_Automation\vaultiso-demo"
@@ -62,7 +70,7 @@ python -m pytest tests/ -q
 ```
 Expected: clean merge (no conflicts — branch was built against a synced base per the existing spec), full suite green post-merge.
 
-- [ ] **Step 4: Delete the now-merged worktree**
+- [x] **Step 4: Delete the now-merged worktree**
 
 ```bash
 git worktree remove .claude/worktrees/pydantic-ai-catalog-port
