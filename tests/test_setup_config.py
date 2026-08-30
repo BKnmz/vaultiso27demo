@@ -3,9 +3,12 @@ Tests for setup_config.py — tier selection (VRAM-fit-first OR logic) and
 the LEGACY_FACTORY_MODELS migration set. No hardware probing, no LLM calls.
 """
 
+import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -168,6 +171,104 @@ class TestItemCountsStructure(unittest.TestCase):
                 setup_config.CONFIG_PATH = orig_path
         finally:
             shutil.rmtree(tmpdir)
+
+
+class TestModelsCatalogFile(unittest.TestCase):
+    """The bundled models_catalog.json is the source of truth for gen_model/
+    reviewer_model/label/why/speed — TIERS merges it at import time with the
+    Python-side hardware-tuning fields (min_ram_gb, min_vram_gb, timeouts, etc.)."""
+
+    def test_bundled_catalog_has_all_five_tiers(self):
+        catalog = setup_config.load_models_catalog()
+        self.assertEqual(
+            set(catalog["tiers"].keys()),
+            {"high", "mid", "cpu_rich", "low", "minimal"},
+        )
+
+    def test_bundled_catalog_tier_entries_have_required_keys(self):
+        catalog = setup_config.load_models_catalog()
+        required = {"gen_model", "reviewer_model", "label", "why", "speed"}
+        for name, entry in catalog["tiers"].items():
+            missing = required - set(entry.keys())
+            self.assertEqual(missing, set(), f"catalog tier '{name}' missing keys: {missing}")
+
+    def test_bundled_catalog_has_legacy_tags(self):
+        catalog = setup_config.load_models_catalog()
+        self.assertIn("legacy_tags", catalog)
+        self.assertIn("gemma4:e2b-it-qat", catalog["legacy_tags"])
+
+    def test_tiers_merged_from_catalog_keep_full_shape(self):
+        # Every tier dict must still carry both the catalog fields AND the
+        # Python-side tuning fields — same contract downstream code relies on.
+        for tier in setup_config.TIERS:
+            for key in ("gen_model", "reviewer_model", "label", "why", "speed",
+                        "min_ram_gb", "min_vram_gb", "ollama_timeout",
+                        "model_swap_delay", "num_predict", "item_counts"):
+                self.assertIn(key, tier, f"tier '{tier.get('name')}' missing '{key}' after merge")
+
+    def test_legacy_factory_models_derived_from_catalog(self):
+        catalog = setup_config.load_models_catalog()
+        expected = set(catalog["legacy_tags"])
+        for tier in catalog["tiers"].values():
+            expected.add(tier["gen_model"])
+            expected.add(tier["reviewer_model"])
+        self.assertEqual(setup_config.LEGACY_FACTORY_MODELS, expected)
+
+
+class TestRefreshCatalogBestEffort(unittest.TestCase):
+    """refresh_catalog_best_effort() is opt-in, never called from main()'s install
+    path, and must never raise or touch the bundled models_catalog.json — only
+    ever writes a separate online-cache file on success."""
+
+    def test_network_failure_never_raises(self):
+        with patch("setup_config.requests.get", side_effect=Exception("offline")):
+            try:
+                setup_config.refresh_catalog_best_effort()
+            except Exception as e:
+                self.fail(f"refresh_catalog_best_effort() raised on network failure: {e}")
+
+    def test_network_failure_does_not_touch_bundled_catalog(self):
+        original = setup_config._CATALOG_PATH.read_text(encoding="utf-8")
+        with patch("setup_config.requests.get", side_effect=Exception("offline")):
+            setup_config.refresh_catalog_best_effort()
+        self.assertEqual(setup_config._CATALOG_PATH.read_text(encoding="utf-8"), original)
+
+    def test_malformed_response_never_raises(self):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.side_effect = ValueError("not json")
+        with patch("setup_config.requests.get", return_value=mock_resp):
+            try:
+                setup_config.refresh_catalog_best_effort()
+            except Exception as e:
+                self.fail(f"refresh_catalog_best_effort() raised on malformed response: {e}")
+
+    def test_success_writes_separate_cache_file_not_bundled(self):
+        original_bundled = setup_config._CATALOG_PATH.read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_path = Path(tmpdir) / "models_catalog.online_cache.json"
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.json.return_value = {"models": [{"name": "some-new-model:1b"}]}
+            with patch("setup_config.requests.get", return_value=mock_resp), \
+                 patch("setup_config._ONLINE_CACHE_PATH", cache_path):
+                setup_config.refresh_catalog_best_effort()
+            self.assertTrue(cache_path.exists())
+        self.assertEqual(setup_config._CATALOG_PATH.read_text(encoding="utf-8"), original_bundled)
+
+    def test_missing_models_key_never_raises_and_does_not_write_cache(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_path = Path(tmpdir) / "models_catalog.online_cache.json"
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.json.return_value = {"foo": "bar"}  # Valid dict, but no "models" key
+            with patch("setup_config.requests.get", return_value=mock_resp), \
+                 patch("setup_config._ONLINE_CACHE_PATH", cache_path):
+                try:
+                    setup_config.refresh_catalog_best_effort()
+                except Exception as e:
+                    self.fail(f"refresh_catalog_best_effort() raised on missing 'models' key: {e}")
+            self.assertFalse(cache_path.exists(), "cache file should not be written when 'models' key is missing")
 
 
 if __name__ == "__main__":

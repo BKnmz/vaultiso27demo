@@ -8,15 +8,19 @@ Console strings are ASCII-only on purpose: install.bat runs in a cp1252 console
 that cannot print Unicode arrows/box-drawing without crashing.
 """
 import argparse
+import json
 import platform
 import subprocess
 import sys
 from pathlib import Path
 
+import requests
 import yaml
 
 BASE_DIR = Path(__file__).parent
 CONFIG_PATH = BASE_DIR / "config.yaml"
+_CATALOG_PATH = BASE_DIR / "models_catalog.json"
+_ONLINE_CACHE_PATH = BASE_DIR / "models_catalog.online_cache.json"
 
 # ---------------------------------------------------------------------------
 # Hardware tiers - ordered best to worst, first match wins (see select_tier).
@@ -25,20 +29,22 @@ CONFIG_PATH = BASE_DIR / "config.yaml"
 # VRAM; a model spilled to CPU runs 5-10x slower, so low-VRAM machines get a
 # small fast generator - never a big spilling one. RAM alone never qualifies
 # for a big model (32 GB RAM + no GPU still generates at CPU speed).
+#
+# Model identity (gen_model/reviewer_model/label/why/speed) lives in
+# models_catalog.json, a bundled+versioned JSON file — this keeps the model
+# picks maintainer-updatable without touching this module. Hardware-tuning
+# fields below (thresholds, timeouts, output length) stay in Python since
+# they're install-time behavior decisions tightly coupled to this codebase,
+# not model facts.
 # ---------------------------------------------------------------------------
-TIERS = [
+_TIER_TUNING = [
     {
         "name":              "high",
-        "label":             "High-end (12 GB+ VRAM)",
         "min_ram_gb":        0,
         "min_vram_gb":       12,
         "ollama_timeout":    120,
         "model_swap_delay":  2,
-        "gen_model":         "gemma4:12b-it-qat",
-        "reviewer_model":    "qwen2.5:1.5b",
         "num_gpu":           1,
-        "why":               "12 GB+ VRAM fits a 7.2 GB generator fully on the GPU.",
-        "speed":             "~1-2 min per document",
         "num_predict":       2000,
         "length_profile":    "comprehensive (~1200-1800 words)",
         "item_counts": {
@@ -50,16 +56,11 @@ TIERS = [
     },
     {
         "name":              "mid",
-        "label":             "Mid-range (6-12 GB VRAM)",
         "min_ram_gb":        0,
         "min_vram_gb":       6,
         "ollama_timeout":    240,
         "model_swap_delay":  4,
-        "gen_model":         "gemma4:e4b-it-qat",
-        "reviewer_model":    "qwen2.5:1.5b",
         "num_gpu":           1,
-        "why":               "6-12 GB VRAM fits a 6.1 GB generator on the GPU.",
-        "speed":             "~2-4 min per document",
         "num_predict":       2000,
         "length_profile":    "comprehensive (~1200-1800 words)",
         "item_counts": {
@@ -71,17 +72,11 @@ TIERS = [
     },
     {
         "name":              "cpu_rich",
-        "label":             "CPU-rich (16 GB+ RAM, < 6 GB VRAM)",
         "min_ram_gb":        16,
         "min_vram_gb":       0,
         "ollama_timeout":    600,
         "model_swap_delay":  12,
-        "gen_model":         "phi4-mini:3.8b-q4_K_M",
-        "reviewer_model":    "qwen2.5:1.5b",
         "num_gpu":           1,
-        "why":               "Plenty of RAM but the GPU is too small for a big model; "
-                             "a small fast generator on CPU beats a big one spilling.",
-        "speed":             "~8-15 min per document",
         "num_predict":       1200,
         "length_profile":    "concise but complete (~500-800 words)",
         "item_counts": {
@@ -93,16 +88,11 @@ TIERS = [
     },
     {
         "name":              "low",
-        "label":             "Standard (8-16 GB RAM)",
         "min_ram_gb":        8,
         "min_vram_gb":       0,
         "ollama_timeout":    900,
         "model_swap_delay":  16,
-        "gen_model":         "phi4-mini:3.8b-q4_K_M",
-        "reviewer_model":    "qwen2.5:1.5b",
         "num_gpu":           1,
-        "why":               "Limited RAM; a 2.5 GB generator is the safe fit.",
-        "speed":             "~10-20 min per document",
         "num_predict":       1200,
         "length_profile":    "concise but complete (~500-800 words)",
         "item_counts": {
@@ -114,16 +104,11 @@ TIERS = [
     },
     {
         "name":              "minimal",
-        "label":             "Minimal (< 8 GB RAM, CPU-only)",
         "min_ram_gb":        0,
         "min_vram_gb":       0,
         "ollama_timeout":    900,
         "model_swap_delay":  20,
-        "gen_model":         "qwen2.5:1.5b",
-        "reviewer_model":    "qwen2.5:1.5b",
         "num_gpu":           0,
-        "why":               "Very low RAM; the smallest model is the only safe choice.",
-        "speed":             "~5-10 min per document",
         "num_predict":       1000,
         "length_profile":    "concise (~400-600 words)",
         "item_counts": {
@@ -135,17 +120,80 @@ TIERS = [
     },
 ]
 
-# Factory model tags that apply_to_config() is allowed to overwrite on
-# re-detection. Includes current tier models PLUS every model shipped by an
-# earlier factory default (v0.4.1 gemma4 tags, the older phi4/mistral/llama
-# set) so an install that picked an old default migrates cleanly. A tag a
-# user typed by hand is NOT in this set and is left untouched.
-LEGACY_FACTORY_MODELS = {
-    # current (v0.4.2)
-    "gemma4:12b-it-qat", "gemma4:e4b-it-qat", "phi4-mini:3.8b-q4_K_M", "qwen2.5:1.5b",
-    # v0.4.1 briefly-shipped tags
-    "gemma4:e2b-it-qat", "mistral:7b-q4_K_M", "llama3.2:3b-q4_K_M",
-}
+
+def load_models_catalog(path=None):
+    """Load the bundled (or an override) models catalog JSON."""
+    p = Path(path) if path else _CATALOG_PATH
+    with open(p, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _build_tiers(catalog=None):
+    """Merge _TIER_TUNING (Python, hardware behavior) with models_catalog.json
+    (model identity) into the full tier dicts the rest of this module expects."""
+    catalog = catalog if catalog is not None else load_models_catalog()
+    tiers = []
+    for tuning in _TIER_TUNING:
+        try:
+            entry = catalog["tiers"][tuning["name"]]
+        except KeyError:
+            raise KeyError(
+                f"_TIER_TUNING has a tier named '{tuning['name']}' but models_catalog.json "
+                f"has no matching entry under \"tiers\". These two files must stay in "
+                f"lockstep — add '{tuning['name']}' to models_catalog.json's \"tiers\", or "
+                f"remove/rename the _TIER_TUNING entry to match."
+            ) from None
+        merged = dict(tuning)
+        merged.update({
+            "gen_model": entry["gen_model"],
+            "reviewer_model": entry["reviewer_model"],
+            "label": entry["label"],
+            "why": entry["why"],
+            "speed": entry["speed"],
+        })
+        tiers.append(merged)
+    return tiers
+
+
+def _build_legacy_factory_models(catalog=None):
+    """Factory model tags that apply_to_config() is allowed to overwrite on
+    re-detection: current tier models plus every models_catalog.json legacy_tags
+    entry (older factory defaults, appended over time, never removed) — so an
+    install that picked an old default migrates cleanly. A tag a user typed by
+    hand is NOT in this set and is left untouched."""
+    catalog = catalog if catalog is not None else load_models_catalog()
+    tags = set(catalog.get("legacy_tags", []))
+    for entry in catalog["tiers"].values():
+        tags.add(entry["gen_model"])
+        tags.add(entry["reviewer_model"])
+    return tags
+
+
+def refresh_catalog_best_effort():
+    """Opt-in, manual-only (CLI --refresh-catalog), never called from install's
+    default path. Best-effort GET to a public Ollama model index; on ANY failure
+    (offline, timeout, malformed response, unexpected schema) this is a silent
+    no-op — never raises, never touches the bundled models_catalog.json. On
+    success, writes an informational cache file only; does not alter TIERS
+    or LEGACY_FACTORY_MODELS for the current process."""
+    try:
+        resp = requests.get("https://ollamadb.dev/api/v1/models", timeout=5)
+        if resp.status_code != 200:
+            return
+        data = resp.json()
+        if not isinstance(data, dict) or "models" not in data:
+            return
+        _ONLINE_CACHE_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        print(f"  [OK] Online model index cached to {_ONLINE_CACHE_PATH.name} "
+              "(informational only — config.yaml is unaffected).")
+    except Exception:
+        pass  # advisory only — never block or fail install on this
+
+
+_catalog = load_models_catalog()
+TIERS = _build_tiers(_catalog)
+LEGACY_FACTORY_MODELS = _build_legacy_factory_models(_catalog)
+del _catalog
 
 
 # ---------------------------------------------------------------------------
@@ -429,10 +477,17 @@ if __name__ == "__main__":
         "--detect", action="store_true",
         help="Print full hardware diagnostics (RAM, per-GPU VRAM list, tier) without writing config.yaml.",
     )
+    parser.add_argument(
+        "--refresh-catalog", action="store_true",
+        help="Best-effort check for newer model tags against a public index. Never touches "
+             "models_catalog.json or config.yaml; writes an informational cache file only.",
+    )
     args = parser.parse_args()
     if args.print_models:
         print_models()
     elif args.detect:
         detect_main()
+    elif args.refresh_catalog:
+        refresh_catalog_best_effort()
     else:
         main()

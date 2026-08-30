@@ -1,0 +1,49 @@
+{
+  "catalog_version": "2026.07",
+  "tiers": {
+    "high": {
+      "gen_model": "gemma4:12b-it-qat",
+      "reviewer_model": "qwen2.5:1.5b",
+      "label": "High-end (12 GB+ VRAM)",
+      "why": "12 GB+ VRAM fits a 7.2 GB generator fully on the GPU.",
+      "speed": "~1-2 min per document"
+    },
+    "mid": {
+      "gen_model": "gemma4:e4b-it-qat",
+      "reviewer_model": "qwen2.5:1.5b",
+      "label": "Mid-range (6-12 GB VRAM)",
+      "why": "6-12 GB VRAM fits a 6.1 GB generator on the GPU.",
+      "speed": "~2-4 min per document"
+    },
+    "cpu_rich": {
+      "gen_model": "phi4-mini:3.8b-q4_K_M",
+      "reviewer_model": "qwen2.5:1.5b",
+      "label": "CPU-rich (16 GB+ RAM, < 6 GB VRAM)",
+      "why": "Plenty of RAM but the GPU is too small for a big model; a small fast generator on CPU beats a big one spilling.",
+      "speed": "~8-15 min per document"
+    },
+    "low": {
+      "gen_model": "phi4-mini:3.8b-q4_K_M",
+      "reviewer_model": "qwen2.5:1.5b",
+      "label": "Standard (8-16 GB RAM)",
+      "why": "Limited RAM; a 2.5 GB generator is the safe fit.",
+      "speed": "~10-20 min per document"
+    },
+    "minimal": {
+      "gen_model": "qwen2.5:1.5b",
+      "reviewer_model": "qwen2.5:1.5b",
+      "label": "Minimal (< 8 GB RAM, CPU-only)",
+      "why": "Very low RAM; the smallest model is the only safe choice.",
+      "speed": "~5-10 min per document"
+    }
+  },
+  "legacy_tags": [
+    "gemma4:12b-it-qat",
+    "gemma4:e4b-it-qat",
+    "phi4-mini:3.8b-q4_K_M",
+    "qwen2.5:1.5b",
+    "gemma4:e2b-it-qat",
+    "mistral:7b-q4_K_M",
+    "llama3.2:3b-q4_K_M"
+  ]
+}

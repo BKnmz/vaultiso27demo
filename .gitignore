@@ -13,6 +13,7 @@ outputs/
 logs/
 inputs/organization_data.json
 icon_main_backup.ico
+models_catalog.online_cache.json
 
 # Secrets
 *.env
