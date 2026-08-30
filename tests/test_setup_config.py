@@ -313,5 +313,100 @@ class TestChooseModelInteractive(unittest.TestCase):
         self.assertEqual(chosen, "phi4-mini:3.8b-q4_K_M")
 
 
+class TestPrintConfigModels(unittest.TestCase):
+    def _write_cfg(self, tmpdir, gen_model, critic_model):
+        cfg_path = Path(tmpdir) / "config.yaml"
+        cfg_path.write_text(
+            f"llm:\n  model: {gen_model!r}\ncritic:\n  model: {critic_model!r}\n",
+            encoding="utf-8",
+        )
+        return cfg_path
+
+    def test_prints_valid_tags(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg_path = self._write_cfg(tmpdir, "phi4-mini:3.8b-q4_K_M", "qwen2.5:1.5b")
+            with patch("setup_config.CONFIG_PATH", cfg_path), \
+                 patch("builtins.print") as mock_print:
+                setup_config.print_config_models()
+            printed = [c.args[0] for c in mock_print.call_args_list]
+            self.assertEqual(printed, ["phi4-mini:3.8b-q4_K_M", "qwen2.5:1.5b"])
+
+    def test_refuses_tag_with_shell_metacharacters(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg_path = self._write_cfg(tmpdir, "x & powershell -enc AAAA", "qwen2.5:1.5b")
+            with patch("setup_config.CONFIG_PATH", cfg_path):
+                with self.assertRaises(SystemExit):
+                    setup_config.print_config_models()
+
+    def test_refuses_missing_config(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            missing = Path(tmpdir) / "does_not_exist.yaml"
+            with patch("setup_config.CONFIG_PATH", missing):
+                with self.assertRaises(SystemExit):
+                    setup_config.print_config_models()
+
+
+class TestApplyToConfigForceGenModel(unittest.TestCase):
+    def test_force_gen_model_overwrites_a_hand_set_tag(self):
+        # Regression test: a previous interactive pick (or any hand-typed tag)
+        # is not a "legacy factory default", so the normal protective rule
+        # would silently ignore a fresh interactive re-pick. force_gen_model=True
+        # is how choose_model_interactive()'s result reaches config.yaml.
+        base_cfg = {
+            "llm": {"base_url": "http://localhost:11434", "model": "some-hand-picked-tag:latest",
+                    "temperature": 0.2, "num_gpu": 1},
+            "critic": {"model": "qwen2.5:1.5b"},
+            "timeouts": {}, "pipeline": {"clauses": []}, "rag": {}, "paths": {},
+            "export": {}, "github": {},
+        }
+        import yaml
+        hw = {"ram_gb": 20, "vram_gb": 2, "cpu": "TestCPU", "os": "TestOS"}
+        tier = setup_config.select_tier(hw)
+        tier = dict(tier)
+        tier["gen_model"] = "newly-chosen-tag:latest"
+
+        with tempfile.NamedTemporaryFile(suffix=".yaml", mode="w", delete=False,
+                                          encoding="utf-8") as f:
+            yaml.dump(base_cfg, f)
+            tmp_path = Path(f.name)
+        original_path = setup_config.CONFIG_PATH
+        setup_config.CONFIG_PATH = tmp_path
+        try:
+            setup_config.apply_to_config(hw, tier, force_gen_model=True)
+            result = yaml.safe_load(tmp_path.read_text(encoding="utf-8"))
+        finally:
+            setup_config.CONFIG_PATH = original_path
+            tmp_path.unlink(missing_ok=True)
+        self.assertEqual(result["llm"]["model"], "newly-chosen-tag:latest")
+
+    def test_without_force_a_hand_set_tag_is_preserved(self):
+        base_cfg = {
+            "llm": {"base_url": "http://localhost:11434", "model": "some-hand-picked-tag:latest",
+                    "temperature": 0.2, "num_gpu": 1},
+            "critic": {"model": "qwen2.5:1.5b"},
+            "timeouts": {}, "pipeline": {"clauses": []}, "rag": {}, "paths": {},
+            "export": {}, "github": {},
+        }
+        import yaml
+        hw = {"ram_gb": 20, "vram_gb": 2, "cpu": "TestCPU", "os": "TestOS"}
+        tier = setup_config.select_tier(hw)
+        tier = dict(tier)
+        tier["gen_model"] = "auto-picked-tag:latest"
+
+        with tempfile.NamedTemporaryFile(suffix=".yaml", mode="w", delete=False,
+                                          encoding="utf-8") as f:
+            yaml.dump(base_cfg, f)
+            tmp_path = Path(f.name)
+        original_path = setup_config.CONFIG_PATH
+        setup_config.CONFIG_PATH = tmp_path
+        try:
+            setup_config.apply_to_config(hw, tier)  # force_gen_model defaults False
+            result = yaml.safe_load(tmp_path.read_text(encoding="utf-8"))
+        finally:
+            setup_config.CONFIG_PATH = original_path
+            tmp_path.unlink(missing_ok=True)
+        self.assertEqual(result["llm"]["model"], "some-hand-picked-tag:latest")
+
+
 if __name__ == "__main__":
     unittest.main()

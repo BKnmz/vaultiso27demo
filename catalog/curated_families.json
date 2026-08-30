@@ -1,13 +1,6 @@
 {
   "families": [
     {
-      "name": "phi-4",
-      "openrouter_match": ["phi-4", "phi4"],
-      "ollama_variants": [
-        {"tag": "phi4-mini:3.8b-q4_K_M", "size_gb": 2.5, "min_ram_gb": 8, "min_vram_gb": 0}
-      ]
-    },
-    {
       "name": "qwen2.5",
       "openrouter_match": ["qwen2.5", "qwen-2.5"],
       "ollama_variants": [
@@ -24,17 +17,10 @@
       ]
     },
     {
-      "name": "llama-3.3",
-      "openrouter_match": ["llama-3.3", "llama3.3"],
+      "name": "llama-3.2",
+      "openrouter_match": ["llama-3.2", "llama3.2"],
       "ollama_variants": [
         {"tag": "llama3.2:3b-q4_K_M", "size_gb": 2.0, "min_ram_gb": 8, "min_vram_gb": 0}
-      ]
-    },
-    {
-      "name": "mistral-small",
-      "openrouter_match": ["mistral-small", "mistral small"],
-      "ollama_variants": [
-        {"tag": "mistral:7b-q4_K_M", "size_gb": 4.4, "min_ram_gb": 8, "min_vram_gb": 6}
       ]
     }
   ]

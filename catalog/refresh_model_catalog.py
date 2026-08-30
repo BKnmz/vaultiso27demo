@@ -11,7 +11,10 @@ from catalog.families import load_curated_families
 from catalog.openrouter_benchmarks import fetch_benchmarks, rank_candidates
 
 _CACHE_DAYS = 90
-_DEFAULT_CATALOG_PATH = Path(__file__).parent.parent / "model_catalog.json"
+# NOTE: the bundled catalog file is "models_catalog.json" (plural) - it's the
+# same file setup_config.py's load_models_catalog()/_CATALOG_PATH reads, ported
+# from the main tool in Task 1. Do not "fix" this to the singular form.
+_DEFAULT_CATALOG_PATH = Path(__file__).parent.parent / "models_catalog.json"
 _DEFAULT_MD_PATH = Path(__file__).parent.parent / "MODEL_CATALOG.md"
 
 # Mirrors setup_config.py's _TIER_TUNING RAM/VRAM floors - kept in sync by
@@ -57,16 +60,21 @@ def _render_markdown(data: dict) -> str:
 
 
 def refresh(force: bool = False, catalog_path=None, md_path=None) -> bool:
+    """Never raises - any failure (missing/malformed catalog file, network
+    error, missing API key, bad response shape) returns False and leaves
+    whatever cache exists untouched. Callers (setup_config.py's main(),
+    the --refresh-benchmarks CLI path, launch.py's auto-repair subprocess)
+    all rely on this never crashing, not just the fetch/rank step inside it."""
     catalog_path = Path(catalog_path) if catalog_path else _DEFAULT_CATALOG_PATH
     md_path = Path(md_path) if md_path else _DEFAULT_MD_PATH
 
-    with open(catalog_path, encoding="utf-8") as f:
-        data = json.load(f)
-
-    if not force and not _is_stale(data.get("fetched_at")):
-        return False
-
     try:
+        with open(catalog_path, encoding="utf-8") as f:
+            data = json.load(f)
+
+        if not force and not _is_stale(data.get("fetched_at")):
+            return False
+
         families = load_curated_families()
         benchmark_rows = fetch_benchmarks()
         for tier_name, tier in data["tiers"].items():

@@ -10,6 +10,7 @@ that cannot print Unicode arrows/box-drawing without crashing.
 import argparse
 import json
 import platform
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -357,8 +358,16 @@ def select_tier(hw: dict) -> dict:
     return dict(TIERS[-1])  # fallback: minimal
 
 
-def apply_to_config(hw: dict, tier: dict) -> None:
-    """Write hardware-calibrated defaults into config.yaml."""
+def apply_to_config(hw: dict, tier: dict, force_gen_model: bool = False) -> None:
+    """Write hardware-calibrated defaults into config.yaml.
+
+    force_gen_model: set True only when tier["gen_model"] just came out of an
+    explicit, interactive choice in this same run (choose_model_interactive())
+    - that choice should always win. Leave False for any non-interactive/
+    automatic call (e.g. launch.py's silent auto-repair subprocess), where the
+    normal protective rule applies: never clobber a tag the user typed by hand
+    or picked on a previous run.
+    """
     if not CONFIG_PATH.exists():
         print(f"  ERROR: config.yaml not found at {CONFIG_PATH}")
         sys.exit(1)
@@ -371,8 +380,10 @@ def apply_to_config(hw: dict, tier: dict) -> None:
     cfg.setdefault("timeouts", {})
 
     # Only overwrite model tags that are still a (current or legacy) factory
-    # default - never clobber a tag the user typed by hand.
-    if cfg["llm"].get("model", "") in LEGACY_FACTORY_MODELS or not cfg["llm"].get("model"):
+    # default - never clobber a tag the user typed by hand. force_gen_model
+    # bypasses this for the generator tag only (an explicit choice this run),
+    # not the reviewer tag (never interactively chosen).
+    if force_gen_model or cfg["llm"].get("model", "") in LEGACY_FACTORY_MODELS or not cfg["llm"].get("model"):
         cfg["llm"]["model"] = tier["gen_model"]
     if cfg["critic"].get("model", "") in LEGACY_FACTORY_MODELS or not cfg["critic"].get("model"):
         cfg["critic"]["model"] = tier["reviewer_model"]
@@ -405,6 +416,37 @@ def print_models():
     tier = select_tier(detect_hardware())
     print(tier["gen_model"])
     print(tier["reviewer_model"])
+
+
+# Ollama tags are colon/dot/dash/underscore-separated alphanumerics
+# (e.g. "phi4-mini:3.8b-q4_K_M") - never shell metacharacters. Anything outside
+# this set is refused rather than handed back to install.bat's `ollama pull`,
+# which interpolates the tag into an unquoted batch command.
+_SAFE_MODEL_TAG = re.compile(r"^[A-Za-z0-9._:-]+$")
+
+
+def print_config_models():
+    """Print config.yaml's current llm.model + critic.model, one per line, for
+    install.bat to capture after apply_to_config() has already run. Reads
+    CONFIG_PATH directly (this module already knows its own directory) instead
+    of install.bat splicing its %SCRIPT_DIR% into an inline `python -c` string
+    literal - avoids both the path-injection risk of that approach and a second
+    hardware-detection pass. Refuses (prints nothing, exits 1) if either stored
+    tag contains anything outside the safe Ollama-tag charset, so a tampered or
+    hand-edited config.yaml can never reach `ollama pull` unvalidated."""
+    if not CONFIG_PATH.exists():
+        sys.exit(1)
+    with open(CONFIG_PATH, encoding="utf-8") as f:
+        cfg = yaml.safe_load(f) or {}
+    gen_model = cfg.get("llm", {}).get("model", "")
+    rev_model = cfg.get("critic", {}).get("model", "")
+    if not _SAFE_MODEL_TAG.match(gen_model) or not _SAFE_MODEL_TAG.match(rev_model):
+        print(f"  ERROR: config.yaml model tag contains unexpected characters "
+              f"(gen={gen_model!r}, reviewer={rev_model!r}) - refusing to print.",
+              file=sys.stderr)
+        sys.exit(1)
+    print(gen_model)
+    print(rev_model)
 
 
 def detect_main():
@@ -470,7 +512,14 @@ def choose_model_interactive(tier: dict) -> str:
     return choices[0]["tag"]
 
 
-def main():
+def main(interactive: bool = True):
+    """interactive=True (install.bat's explicit `python setup_config.py` call)
+    prompts for a ranked model choice via choose_model_interactive() and that
+    choice always wins in config.yaml. interactive=False (launch.py's silent
+    background auto-repair subprocess - see check_hardware_config()) never
+    calls input(), auto-picks the top-ranked benchmark choice (or the tier
+    default if none), and leaves apply_to_config()'s normal protective
+    "don't clobber a hand-set tag" rule in effect."""
     print()
     print("  Detecting hardware...")
     hw = detect_hardware()
@@ -497,12 +546,16 @@ def main():
     print(f"  Ollama timeout: {tier['ollama_timeout']}s")
     print(f"  Swap delay    : {tier['model_swap_delay']}s")
 
-    chosen_gen_model = choose_model_interactive(tier)
+    if interactive:
+        chosen_gen_model = choose_model_interactive(tier)
+    else:
+        choices = tier.get("benchmark_choices") or []
+        chosen_gen_model = choices[0]["tag"] if choices else tier["gen_model"]
     tier = dict(tier)
     tier["gen_model"] = chosen_gen_model
     print(f"  Gen model     : {tier['gen_model']}")
 
-    apply_to_config(hw, tier)
+    apply_to_config(hw, tier, force_gen_model=interactive)
     print()
     print("  [OK]  config.yaml updated with hardware-calibrated settings")
 
@@ -532,6 +585,19 @@ if __name__ == "__main__":
         help="Detect hardware, print ranked choices, prompt for a pick, print the chosen "
              "tag alone on stdout (for install.bat to capture). Does not write config.yaml.",
     )
+    parser.add_argument(
+        "--print-config-models", action="store_true",
+        help="Print config.yaml's current llm.model + critic.model (one per line) after "
+             "main() has already run and applied them - for install.bat to capture without "
+             "a second hardware-detection pass. Validates each tag against a safe Ollama-tag "
+             "charset first and refuses (exit 1) rather than print anything unexpected.",
+    )
+    parser.add_argument(
+        "--non-interactive", action="store_true",
+        help="With no other flag: run the normal detect+configure flow without prompting - "
+             "auto-picks the top-ranked benchmark choice instead of asking. Used by "
+             "launch.py's silent background auto-repair; never used by install.bat.",
+    )
     args = parser.parse_args()
     if args.print_models:
         print_models()
@@ -549,5 +615,7 @@ if __name__ == "__main__":
         catalog = load_models_catalog()
         tier["benchmark_choices"] = catalog["tiers"].get(tier["name"], {}).get("benchmark_choices", [])
         print(choose_model_interactive(tier))
+    elif args.print_config_models:
+        print_config_models()
     else:
-        main()
+        main(interactive=not args.non_interactive)

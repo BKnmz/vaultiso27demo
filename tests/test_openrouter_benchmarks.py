@@ -96,6 +96,27 @@ class TestRankCandidates(unittest.TestCase):
         self.assertIn("qwen2.5:1.5b", qwen_tags)
         self.assertNotIn("qwen2.5:7b-instruct-q4_K_M", qwen_tags)
 
+    def test_gpu_tier_does_not_exclude_variants_on_ram_alone(self):
+        # "high" tier: min_vram_gb=12, min_ram_gb=0 (RAM isn't the constraint -
+        # a 12GB+ VRAM machine is assumed to have adequate RAM). A curated
+        # variant needing 8 GB RAM must NOT be excluded just because the tier's
+        # own min_ram_gb floor is 0 - that 0 means "not gated on RAM", not
+        # "0 GB of RAM guaranteed". Regression test for a real bug caught by
+        # code-review: this previously excluded almost every GPU-tier variant.
+        ranked = rank_candidates(self.families, FAKE_RESPONSE["data"],
+                                  tier_min_ram_gb=0, tier_min_vram_gb=12)
+        tags = {c["tag"] for c in ranked}
+        # qwen2.5:7b-instruct-q4_K_M needs 8 GB RAM / 6 GB VRAM - fits a
+        # 12GB-VRAM tier easily, and must not be excluded by the tier's own
+        # min_ram_gb=0 (that means "not RAM-gated", not "0 GB guaranteed").
+        self.assertIn("qwen2.5:7b-instruct-q4_K_M", tags)
+
+    def test_ram_gated_tier_still_excludes_variants_needing_more_ram(self):
+        ranked = rank_candidates(self.families, FAKE_RESPONSE["data"],
+                                  tier_min_ram_gb=0, tier_min_vram_gb=0)
+        qwen_tags = {c["tag"] for c in ranked if c["family"] == "qwen2.5"}
+        self.assertNotIn("qwen2.5:7b-instruct-q4_K_M", qwen_tags)
+
     def test_caps_at_three_results(self):
         many_rows = [{"model_permaslug": f"microsoft/phi-4-v{i}", "display_name": "Phi 4",
                        "intelligence_index": float(i)} for i in range(10)]

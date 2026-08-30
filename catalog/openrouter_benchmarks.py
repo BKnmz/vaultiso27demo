@@ -52,11 +52,17 @@ def rank_candidates(families: list, benchmark_rows: list,
                     best_score = score
         if best_score is None:
             continue
+        # A tier is either VRAM-gated (min_vram_gb > 0, e.g. "high"/"mid") or
+        # RAM-gated (min_vram_gb == 0, e.g. "cpu_rich"/"low"/"minimal") - never
+        # both, mirroring setup_config.py's select_tier() gpu_ok/cpu_ok split.
+        # A VRAM-gated tier's min_ram_gb is 0 meaning "not the constraint here",
+        # not "0 GB of RAM guaranteed" - a machine with 12GB+ VRAM is assumed to
+        # have adequate RAM as a side effect, so RAM is never checked for it.
+        is_vram_gated_tier = tier_min_vram_gb > 0
         for variant in family["ollama_variants"]:
-            fits_vram = variant["min_vram_gb"] <= tier_min_vram_gb
-            if variant["min_vram_gb"] > 0 and not fits_vram:
+            if variant["min_vram_gb"] > 0 and variant["min_vram_gb"] > tier_min_vram_gb:
                 continue
-            if variant["min_ram_gb"] > 0 and variant["min_ram_gb"] > tier_min_ram_gb:
+            if not is_vram_gated_tier and variant["min_ram_gb"] > tier_min_ram_gb:
                 continue
             candidates.append({
                 "tag": variant["tag"],

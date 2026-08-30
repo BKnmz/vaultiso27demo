@@ -57,7 +57,7 @@ def check_hardware_config():
     if "timeouts" not in cfg:
         log.info("Hardware config not found — running auto-configuration...")
         result = subprocess.run(
-            [sys.executable, str(BASE_DIR / "setup_config.py")],
+            [sys.executable, str(BASE_DIR / "setup_config.py"), "--non-interactive"],
             cwd=str(BASE_DIR),
         )
         if result.returncode != 0:
