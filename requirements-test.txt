@@ -1,0 +1,28 @@
+# Minimal dependency set for CI / the daily DevSecOps loop.
+#
+# Enough to run `python -m pytest tests/` and parse config.yaml — nothing more.
+# The full desktop app (Streamlit UI, PDF ingest, GitHub sync) still needs
+# requirements.txt.
+#
+# Deliberately NO --extra-index-url. requirements.txt pins torch==2.4.1+cpu from
+# download.pytorch.org, which sandboxed and CI networks commonly block, and the
+# "+cpu" local version has no fallback on PyPI so the whole install dies on it.
+# Plain torch==2.4.1 resolves from PyPI and is all sentence-transformers needs.
+#
+# Excluded vs requirements.txt: streamlit, pandas, pypdf, PyGithub — imported
+# only under ui/, which the test suite never touches.
+
+pytest>=8.0
+
+# pipeline.py / rag_setup.py import these at module scope, so the tests need
+# them even though no test performs a real embedding.
+torch==2.4.1
+chromadb==1.5.8
+sentence-transformers==3.0.1
+
+openpyxl==3.1.2
+jinja2==3.1.4
+pyyaml==6.0.1
+requests==2.32.3
+python-docx>=1.1.0
+psutil>=5.9.0
