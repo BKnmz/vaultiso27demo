@@ -10,6 +10,31 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-30-benchmark-model-catalog-design.md`
 
+## Status: Implemented (2026-08-30)
+
+All 8 tasks complete, 197 tests passing (5 skipped — RAG index not built in this worktree,
+environmental). Deviations from this plan discovered during implementation:
+
+- **OpenRouter endpoint corrected**: real path is `/api/v1/benchmarks` (plan assumed
+  `/list-benchmarks`), and auth is **required** (bearer API key via `OPENROUTER_API_KEY`),
+  not optional as the spec's "verify during implementation" note assumed.
+- **`--refresh-benchmarks` used instead of `--refresh-catalog`**: that flag name was already
+  taken by the pre-existing ollamadb-based advisory refresh merged in Task 1.
+- **Task 7's `CLAUDE.md` is untracked, not committed**: this repo's `.gitignore` deliberately
+  excludes `CLAUDE.md` (a pre-existing convention, not something this plan should override).
+  It still exists on disk and works for local sessions.
+- **Devsecops checkpoint (Task 8) found and fixed 6 real bugs** beyond what any single task's
+  own tests caught: a catalog filename mismatch that silently broke the whole feature
+  (`model_catalog.json` vs the real `models_catalog.json`), a RAM/VRAM filtering bug that
+  excluded almost every GPU-tier candidate, a command-injection risk in `install.bat`'s
+  config readback (fixed with a validating `print_config_models()` instead of a spliced
+  `python -c` one-liner), an `install.bat` ordering regression that skipped hardware
+  calibration when Ollama isn't installed yet, a hang risk in `launch.py`'s silent
+  auto-repair subprocess (now `--non-interactive`), a sticky-pick bug where a second
+  interactive re-choice was silently ignored, and two curated-family data-accuracy bugs
+  (`llama-3.3`→wrong tag; `phi-4`/`mistral-small` size-mismatched to their local tags).
+  See the Task 8 commit for full detail.
+
 ## Global Constraints
 
 - Zero cloud API calls at **runtime** inference (unchanged project rule) — the benchmark fetch happens at **install time only**, same internet-required window as the existing pip/HuggingFace/Ollama downloads in `install.bat`.
@@ -92,7 +117,7 @@ git push origin --delete worktree-pydantic-ai-catalog-port
 - Produces: `families.py:load_curated_families(path=None) -> list[dict]`, each dict shaped `{"name": str, "openrouter_match": list[str], "ollama_variants": [{"tag": str, "size_gb": float, "min_ram_gb": int, "min_vram_gb": int}]}`.
 - Consumed by: Task 3's `refresh_model_catalog.py`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # tests/test_catalog_families.py
@@ -130,12 +155,12 @@ class TestLoadCuratedFamilies(unittest.TestCase):
             self.assertIn(expected, names, f"expected family '{expected}' in allowlist")
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `python -m pytest tests/test_catalog_families.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'catalog'`
 
-- [ ] **Step 3: Write `catalog/curated_families.json`**
+- [x] **Step 3: Write `catalog/curated_families.json`**
 
 ```json
 {
@@ -184,7 +209,7 @@ Note: this is a starting set covering the families named in the user's own resea
 (2026-08-30 web search results). Extend by hand over time — this file is never
 auto-generated.
 
-- [ ] **Step 4: Write `catalog/__init__.py` and `catalog/families.py`**
+- [x] **Step 4: Write `catalog/__init__.py` and `catalog/families.py`**
 
 `catalog/__init__.py` — empty file.
 
@@ -205,12 +230,12 @@ def load_curated_families(path=None) -> list:
     return data["families"]
 ```
 
-- [ ] **Step 5: Run test to verify it passes**
+- [x] **Step 5: Run test to verify it passes**
 
 Run: `python -m pytest tests/test_catalog_families.py -v`
 Expected: PASS (3 tests)
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add catalog/__init__.py catalog/families.py catalog/curated_families.json tests/test_catalog_families.py
@@ -229,7 +254,7 @@ git commit -m "feat: add curated model-family allowlist for benchmark matching"
 - Consumes: `catalog.families.load_curated_families()` (Task 2).
 - Produces: `openrouter_benchmarks.py:fetch_benchmarks(session=None) -> list[dict]` (raises on failure — caller in Task 4 handles the try/except for the silent-fallback rule), `rank_candidates(families, benchmark_rows, tier_min_ram_gb, tier_min_vram_gb) -> list[dict]` returning up to 3 entries shaped `{"tag": str, "family": str, "intelligence_index": float, "size_gb": float}`, sorted descending by `intelligence_index`, filtered to variants that fit the given tier's RAM/VRAM floor.
 
-- [ ] **Step 1: Verify the real API response shape before writing the parser**
+- [x] **Step 1: Verify the real API response shape before writing the parser**
 
 This step is manual, not part of the test suite — run once during implementation:
 ```bash
@@ -237,7 +262,7 @@ curl -s "https://openrouter.ai/api/v1/list-benchmarks?task_type=intelligence" | 
 ```
 Confirm the top-level key holding the row array (assumed `"data"` below — a list of `{model_permaslug, display_name, intelligence_index, ...}`) and whether an `Authorization` header is required (a 401 here means it is — if so, add `openrouter_api_key` to `config.yaml`'s `catalog:` section, read via `os.environ.get("OPENROUTER_API_KEY")` as a fallback, and pass `headers={"Authorization": f"Bearer {key}"}`). If the actual field names differ from the assumption below, update Step 4's `_extract_row_score` accordingly before proceeding — do not write tests against fields that don't exist in the real response.
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 ```python
 # tests/test_openrouter_benchmarks.py
@@ -325,12 +350,12 @@ class TestRankCandidates(unittest.TestCase):
         self.assertLessEqual(len(ranked), 3)
 ```
 
-- [ ] **Step 3: Run tests to verify they fail**
+- [x] **Step 3: Run tests to verify they fail**
 
 Run: `python -m pytest tests/test_openrouter_benchmarks.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'catalog.openrouter_benchmarks'`
 
-- [ ] **Step 4: Write `catalog/openrouter_benchmarks.py`**
+- [x] **Step 4: Write `catalog/openrouter_benchmarks.py`**
 
 ```python
 """Fetches OpenRouter benchmark scores and ranks curated-family candidates
@@ -398,12 +423,12 @@ def rank_candidates(families: list, benchmark_rows: list,
     return candidates[:3]
 ```
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [x] **Step 5: Run tests to verify they pass**
 
 Run: `python -m pytest tests/test_openrouter_benchmarks.py -v`
 Expected: PASS (7 tests)
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add catalog/openrouter_benchmarks.py tests/test_openrouter_benchmarks.py
@@ -422,7 +447,7 @@ git commit -m "feat: fetch OpenRouter benchmarks and rank candidates within tier
 - Consumes: `catalog.families.load_curated_families()` (Task 2), `catalog.openrouter_benchmarks.fetch_benchmarks()` / `rank_candidates()` (Task 3), `setup_config.load_models_catalog()` / `_TIER_TUNING` (Task 1, merged).
 - Produces: `refresh_model_catalog.py:refresh(force=False, catalog_path=None, md_path=None) -> bool` (returns `True` if it actually wrote new data, `False` if it left the cache untouched - either because the cache was still fresh and `force=False`, or because the fetch failed), which Task 5's `setup_config.py` calls at install time. Writes/updates `model_catalog.json`'s per-tier `benchmark_choices` key and `fetched_at` timestamp, and `MODEL_CATALOG.md`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 # tests/test_refresh_model_catalog.py
@@ -510,12 +535,12 @@ class TestRefresh(unittest.TestCase):
         mock_fetch.assert_not_called()
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `python -m pytest tests/test_refresh_model_catalog.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'catalog.refresh_model_catalog'`
 
-- [ ] **Step 3: Write `catalog/refresh_model_catalog.py`**
+- [x] **Step 3: Write `catalog/refresh_model_catalog.py`**
 
 ```python
 """Refreshes model_catalog.json's benchmark_choices from OpenRouter, on a
@@ -613,12 +638,12 @@ if __name__ == "__main__":
     print("Catalog refreshed." if changed else "Catalog cache still fresh - no fetch performed.")
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `python -m pytest tests/test_refresh_model_catalog.py -v`
 Expected: PASS (7 tests)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add catalog/refresh_model_catalog.py tests/test_refresh_model_catalog.py
@@ -637,7 +662,7 @@ git commit -m "feat: add refresh_model_catalog orchestration with 90-day cache +
 - Consumes: `catalog.refresh_model_catalog.refresh()` (Task 4).
 - Produces: `setup_config.py:choose_model_interactive(tier: dict) -> str` (returns the chosen Ollama tag), called from `install.bat` in Task 6 via a new `--choose-model` CLI mode.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # append to tests/test_setup_config.py
@@ -686,12 +711,12 @@ class TestChooseModelInteractive(unittest.TestCase):
 
 Add `import unittest.mock` near the top of `tests/test_setup_config.py` alongside the existing `import unittest`.
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `python -m pytest tests/test_setup_config.py::TestChooseModelInteractive -v`
 Expected: FAIL with `AttributeError: module 'setup_config' has no attribute 'choose_model_interactive'`
 
-- [ ] **Step 3: Add `choose_model_interactive` and the refresh-trigger to `setup_config.py`**
+- [x] **Step 3: Add `choose_model_interactive` and the refresh-trigger to `setup_config.py`**
 
 Add near the bottom of `setup_config.py`, above `def main():`:
 
@@ -768,12 +793,12 @@ And in the dispatch logic:
         main()
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `python -m pytest tests/test_setup_config.py -v`
 Expected: PASS (all existing + 4 new tests)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add setup_config.py tests/test_setup_config.py
@@ -790,7 +815,7 @@ git commit -m "feat: wire interactive benchmark-ranked model choice into setup_c
 **Interfaces:**
 - Consumes: `setup_config.py --choose-model` (Task 5) — invoked directly (not through `for /f` capture) so the interactive `input()` prompt reaches the real console; the chosen tag is captured via a **second**, non-interactive `for /f` call reading `config.yaml` back afterward.
 
-- [ ] **Step 1: Replace the existing capture-and-pull block**
+- [x] **Step 1: Replace the existing capture-and-pull block**
 
 Current `install.bat:147-159` silently captures two lines from `--print-models` with no user input at all. Replace lines 147-171 with:
 
@@ -834,7 +859,7 @@ Current `install.bat:147-159` silently captures two lines from `--print-models` 
 
 Note this removes the old STEP 3b's separate call to `setup_config.py` (line 97) becoming redundant with the one now in STEP 5 — **also delete `install.bat:91-103`** (the old "STEP 3b" block) since `setup_config.py` now runs once, interactively, at STEP 5 instead of twice (silently at 3b, then again to re-read tags at 5). Renumber the `echo [STEP 4/5]` and `echo [STEP 5/5]` labels to `[STEP 3/4]` and `[STEP 4/4]` respectively (and the intro's `echo    1. ... 5. ...` list at the top of the file, lines 12-17, drops from 5 items to 4 — remove item 2's now-inaccurate wording if it referenced hardware detection as a separate step).
 
-- [ ] **Step 2: Manual verification (batch scripts have no automated test harness in this repo)**
+- [x] **Step 2: Manual verification (batch scripts have no automated test harness in this repo)**
 
 Run `install.bat` end-to-end on the current machine (or a throwaway venv) and confirm:
 - Hardware detection prints once, not twice.
@@ -842,7 +867,7 @@ Run `install.bat` end-to-end on the current machine (or a throwaway venv) and co
 - `ollama pull` runs against the chosen tag, not always the tier default.
 - A `Ctrl+C` at the pull prompt still exits cleanly (existing behavior, unchanged).
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add install.bat
@@ -860,7 +885,7 @@ git commit -m "feat: make install.bat present ranked model choices interactively
 - Consumes: nothing (a static document).
 - Produces: nothing consumed by other tasks — purely documentation.
 
-- [ ] **Step 1: Write `CLAUDE.md`**
+- [x] **Step 1: Write `CLAUDE.md`**
 
 ```markdown
 # VaultISO27-demo — Project Guide
@@ -889,7 +914,7 @@ decisions coupled to this codebase, kept separate from the swappable model ident
 - Do not let a catalog refresh failure block `install.bat` — it must fall back silently.
 ```
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add CLAUDE.md
@@ -902,14 +927,14 @@ git commit -m "docs: add demo repo CLAUDE.md with model catalog pointer"
 
 **Files:** none new — verification only.
 
-- [ ] **Step 1: Full test suite**
+- [x] **Step 1: Full test suite**
 
 Run: `python -m pytest tests/ -q`
 Expected: all tests green, including the new `test_catalog_families.py`,
 `test_openrouter_benchmarks.py`, `test_refresh_model_catalog.py`, and the extended
 `test_setup_config.py`.
 
-- [ ] **Step 2: Code review + security review**
+- [x] **Step 2: Code review + security review**
 
 Run the `code-review` skill and `security-review` skill against the full diff since Task 1's
 merge commit. Pay particular attention to: the `OPENROUTER_API_KEY` handling (must never be
@@ -917,9 +942,9 @@ logged, must never be committed if a user sets one in `config.yaml`), and the `i
 in `choose_model_interactive` (no injection risk — it only ever indexes into a fixed list,
 never `eval`s or shells out with the raw input).
 
-- [ ] **Step 3: Fix any CONFIRMED findings, re-run Step 1, commit fixes**
+- [x] **Step 3: Fix any CONFIRMED findings, re-run Step 1, commit fixes**
 
-- [ ] **Step 4: Manual end-to-end run**
+- [x] **Step 4: Manual end-to-end run**
 
 On the current machine (documented: 20 GB RAM / 2 GB VRAM / cpu_rich tier), run
 `install.bat` fresh (or `python setup_config.py` alone) and confirm the ranked choices shown
