@@ -2,6 +2,7 @@
 from __future__ import annotations
 import sys
 import subprocess
+import html as _html
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -17,17 +18,18 @@ from icons import icon
 
 def _color_log_line(line: str) -> str:
     s = line.rstrip()
+    s_escaped = _html.escape(s)
     if "[DONE]" in s:
-        return f'<div class="ok">{s}</div>'
+        return f'<div class="ok">{s_escaped}</div>'
     if "[REVIEWER] CONDITIONAL PASS" in s or "CONDITIONAL PASS" in s:
-        return f'<div class="warn">{s}</div>'
+        return f'<div class="warn">{s_escaped}</div>'
     if "ERROR" in s or "Traceback" in s or "FAIL" in s:
-        return f'<div class="err">{s}</div>'
+        return f'<div class="err">{s_escaped}</div>'
     if s.startswith("[") and "] " in s and ("RAG" in s or "Prompting" in s or "Loading" in s or "Auto-rev" in s):
-        return f'<div class="dim">{s}</div>'
+        return f'<div class="dim">{s_escaped}</div>'
     if s.startswith("→") or (s.startswith("[") and "Clause" in s):
-        return f'<div>{s}</div>'
-    return f'<div class="dim">{s}</div>'
+        return f'<div>{s_escaped}</div>'
+    return f'<div class="dim">{s_escaped}</div>'
 
 
 def render() -> None:
