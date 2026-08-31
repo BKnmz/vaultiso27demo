@@ -4,17 +4,25 @@ You are the daily health-check orchestrator for this repository. You run once a 
 have no memory of previous runs — everything you need to know, you determine fresh from the
 repo's current state. Follow these steps in order. Do not skip the no-op gate.
 
-## Step 0 — Install dependencies
+## Step 0 — Verify dependencies
 
-This sandbox does not come with the project's Python dependencies preinstalled (confirmed:
-`pytest` is not present by default). Before anything else:
+This environment has a setup script that runs `pip install -r requirements.txt` once and
+gets cached (~7 days) — see https://code.claude.com/docs/en/cloud-environments#setup-scripts.
+Every fire after the first should have dependencies already present. Verify cheaply instead
+of reinstalling:
 
 ```
-pip install -r requirements.txt
+python -c "import pytest, yaml, chromadb, sentence_transformers, torch"
 ```
 
-If this fails, report "Daily check: could not install dependencies, environment problem —
-not a code issue" and STOP. Do not proceed to the no-op gate on a broken environment.
+- If this succeeds: proceed straight to Step 1.
+- If it fails: the cache may be stale or the setup script hasn't run yet on this environment.
+  Fall back to `pip install -r requirements.txt`. If that ALSO fails (e.g. a network/proxy
+  error reaching a package index), report "Daily check: could not install dependencies,
+  environment problem — not a code issue" and STOP. Do not proceed to the no-op gate on a
+  broken environment. Do not spend more than one fallback attempt on this — a persistent
+  install failure means the environment needs reconfiguring (setup script or network access),
+  not something to retry daily.
 
 ## Step 1 — No-op gate
 
