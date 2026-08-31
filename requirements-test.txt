@@ -9,8 +9,10 @@
 # "+cpu" local version has no fallback on PyPI so the whole install dies on it.
 # Plain torch==2.4.1 resolves from PyPI and is all sentence-transformers needs.
 #
-# Excluded vs requirements.txt: streamlit, pandas, pypdf, PyGithub — imported
-# only under ui/, which the test suite never touches.
+# Note: Tests import from ui/ (test_get_review_verdict.py, test_org_extraction.py,
+# test_org_profile_schema.py, test_review_findings_render.py → ui/core.py / ui/_pages/review.py)
+# and critic.py (test_critic.py, test_pipeline.py), so streamlit and pydantic_ai
+# are required.
 
 pytest>=8.0
 
@@ -26,3 +28,12 @@ pyyaml==6.0.1
 requests==2.32.3
 python-docx>=1.1.0
 psutil>=5.9.0
+
+# Tests import from ui/ and critic.py
+streamlit==1.36.0
+pydantic-ai-slim[openai]==2.9.0
+
+# REQUIRED PIN: streamlit 1.36 pins protobuf<6, but chromadb pulls in
+# googleapis-common-protos that needs protobuf>=6.33.5. Without this pin,
+# import chromadb dies with google.protobuf.runtime_version.VersionError.
+googleapis-common-protos==1.70.0

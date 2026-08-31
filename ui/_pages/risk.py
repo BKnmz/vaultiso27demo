@@ -134,8 +134,16 @@ def render() -> None:
                 else:
                     score = likelihood * impact
                     refs = [r.strip() for r in control_refs.split(",") if r.strip()]
+                    # Derive next ID from highest existing numeric suffix, not list length
+                    max_id = 0
+                    for risk in data:
+                        try:
+                            num = int(risk.get("id", "R000")[1:])  # Extract digits after 'R'
+                            max_id = max(max_id, num)
+                        except (ValueError, IndexError):
+                            pass
                     new_risk = {
-                        "id":             f"R{len(data)+1:03d}",
+                        "id":             f"R{max_id + 1:03d}",
                         "asset_ref":      asset_ref.strip(),
                         "threat":         threat.strip(),
                         "vulnerability":  vulnerability.strip(),

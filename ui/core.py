@@ -1296,18 +1296,33 @@ def export_soa_to_excel(evidence_json: str, org_name: str = "") -> bytes:
 
 
 def _annex_collect_from_state() -> dict:
-    """Collect all annex widget values from st.session_state into a dict."""
-    data = {}
+    """Collect annex widget values from st.session_state, merging with persisted evidence.
+
+    Only controls present in session_state are updated; controls not visited this
+    session retain their previously saved evidence. This prevents accidental data
+    loss when saving a subset of controls."""
+    persisted = load_annex_a()
+    data = persisted.copy()
+
+    # Update only the controls that were rendered in session_state
     for cid in ANNEX_A_CONTROLS:
-        applicable = st.session_state.get(f"annex_{cid}_applicable", True)
-        data[cid] = {
-            "applicable":    applicable,
-            "status":        st.session_state.get(f"annex_{cid}_status", "Not Assessed"),
-            "justification": st.session_state.get(f"annex_{cid}_justification", ""),
-            "evidence_refs": [
-                r.strip() for r in
-                st.session_state.get(f"annex_{cid}_evidence", "").splitlines()
-                if r.strip()
-            ],
-        }
+        session_key_applicable = f"annex_{cid}_applicable"
+        session_key_status = f"annex_{cid}_status"
+        session_key_justification = f"annex_{cid}_justification"
+        session_key_evidence = f"annex_{cid}_evidence"
+
+        # Only update if this control was rendered (at least one widget key exists in session_state)
+        if any(k in st.session_state for k in [session_key_applicable, session_key_status,
+                                                  session_key_justification, session_key_evidence]):
+            applicable = st.session_state.get(session_key_applicable, True)
+            data[cid] = {
+                "applicable":    applicable,
+                "status":        st.session_state.get(session_key_status, "Not Assessed"),
+                "justification": st.session_state.get(session_key_justification, ""),
+                "evidence_refs": [
+                    r.strip() for r in
+                    st.session_state.get(session_key_evidence, "").splitlines()
+                    if r.strip()
+                ],
+            }
     return data

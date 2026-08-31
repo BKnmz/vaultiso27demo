@@ -84,14 +84,15 @@ def refresh(force: bool = False, catalog_path=None, md_path=None) -> bool:
                 tier_min_ram_gb=floor["min_ram_gb"],
                 tier_min_vram_gb=floor["min_vram_gb"],
             )
+
+        data["fetched_at"] = datetime.now(timezone.utc).isoformat()
+        with open(catalog_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        md_path.write_text(_render_markdown(data), encoding="utf-8")
     except Exception:
         # Silent fallback per spec - leave the existing cache file untouched.
         return False
 
-    data["fetched_at"] = datetime.now(timezone.utc).isoformat()
-    with open(catalog_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
-    md_path.write_text(_render_markdown(data), encoding="utf-8")
     return True
 
 

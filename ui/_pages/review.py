@@ -278,6 +278,8 @@ def render() -> None:
 
         # AI Reviewer findings (full-width card)
         findings_html = _render_reviewer_findings(get_review_verdict(selected), rev_text) if rev_text else ""
+        no_findings_msg = "<p style='color:var(--ink-3);font-size:12px'>No AI review available. Run the AI Reviewer to see findings.</p>"
+        findings_content = findings_html if findings_html else no_findings_msg
         st.markdown(
             f'<div class="card" style="margin-bottom:8px">'
             f'<div class="card-head">'
@@ -285,7 +287,7 @@ def render() -> None:
             f'{pill(rkind, rlabel, dot=False)}'
             f'</div>'
             f'<div class="card-body" style="padding:14px">'
-            f'{findings_html if findings_html else "<p style=\'color:var(--ink-3);font-size:12px\'>No AI review available. Run the AI Reviewer to see findings.</p>"}'
+            f'{findings_content}'
             f'</div>'
             f'</div>',
             unsafe_allow_html=True,

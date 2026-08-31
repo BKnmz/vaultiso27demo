@@ -289,6 +289,23 @@ def _upload_card(org: dict, cfg: dict) -> None:
 # Key Personnel tab
 # ---------------------------------------------------------------------------
 
+def _clear_personnel_widget_state() -> None:
+    """Drop index-keyed personnel widget state.
+
+    The Role/Name inputs below are keyed by list index (kp_role_{i} /
+    kp_name_{i}). Streamlit gives session_state precedence over a widget's
+    `value=` argument once that key exists, so after the list is popped or
+    reordered, index i no longer refers to the same person but the widget
+    would still render — and, if saved, persist — the value that used to
+    sit at that index. Clearing this state after any structural change to
+    the list forces the next render to re-seed every input from the
+    (now correct) saved data instead of replaying stale text onto a
+    different person.
+    """
+    for key in [k for k in st.session_state if k.startswith("kp_role_") or k.startswith("kp_name_")]:
+        del st.session_state[key]
+
+
 def _tab_personnel() -> None:
     org = load_org()
     cfg = load_config()
@@ -307,7 +324,37 @@ def _tab_personnel() -> None:
                     current.pop(i)
                     org["key_personnel"] = current
                     save_org(org)
+                    # The list just shrank/shifted — see
+                    # _clear_personnel_widget_state for why this must run
+                    # before the rerun repaints the (now misaligned) rows.
+                    _clear_personnel_widget_state()
                     st.rerun()
+
+        # Persist edited Role/Name values only on an explicit action, not on
+        # every rerun. Auto-saving on every rerun would (a) risk writing an
+        # empty string the instant a user clears a field mid-edit — before
+        # they've typed the replacement — silently blanking a real record,
+        # and (b) has no way to distinguish "user really wants this blank"
+        # from a transient in-between state. A dedicated button makes the
+        # write a deliberate act, same as Add/Remove already are. At the
+        # moment this button is clicked, every kp_role_i/kp_name_i in
+        # session_state was just produced by the widgets rendered above in
+        # this same run, so indices are guaranteed aligned with `current`.
+        if st.button("Save changes", key="kp_save_edits_btn"):
+            changed = False
+            for i, p in enumerate(current):
+                new_role = st.session_state.get(f"kp_role_{i}", p.get("role", ""))
+                new_name = st.session_state.get(f"kp_name_{i}", p.get("name", ""))
+                if new_role != p.get("role", "") or new_name != p.get("name", ""):
+                    p["role"] = new_role
+                    p["name"] = new_name
+                    changed = True
+            if changed:
+                org["key_personnel"] = current
+                save_org(org)
+                st.success("Changes saved.")
+            else:
+                st.info("No changes to save.")
     else:
         st.info("No key personnel saved yet. Add manually or extract from an org chart below.")
 
@@ -806,11 +853,15 @@ def _tab_model_guide() -> None:
     for m in MODEL_GUIDE:
         recommended = (m["min_ram_gb"] <= ram)
         border = "border:2px solid var(--accent);" if recommended else ""
+        badge = (
+            "&nbsp;&nbsp;<span style='font-size:10px;background:var(--accent);"
+            "color:white;border-radius:4px;padding:1px 6px'>recommended</span>"
+        ) if recommended else ""
         cards_html += (
             f'<div class="card" style="padding:0;{border}">'
             f'<div class="card-body">'
             f'<div class="mono" style="font-size:13px;font-weight:500;color:var(--ink)">{m["Model"]}'
-            f'{"&nbsp;&nbsp;<span style=\'font-size:10px;background:var(--accent);color:white;border-radius:4px;padding:1px 6px\'>recommended</span>" if recommended else ""}'
+            f'{badge}'
             f'</div>'
             f'<div style="font-size:12px;color:var(--ink-3);margin:4px 0 12px">{m["Best for"]}</div>'
             f'<div class="meta-row"><span class="k">VRAM</span><span class="v mono">{m["VRAM"]}</span></div>'
