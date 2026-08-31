@@ -13,7 +13,7 @@ ISO/IEC 27001:2022 — *Information security, cybersecurity and privacy protecti
 **ISO/IEC 27001:2022 is proprietary and copyrighted. This tool does not redistribute the standard text.**
 
 - This software does **not** contain verbatim text from ISO/IEC 27001:2022.
-- The audit checklist file (`rag/ISO27001_Audit_Checklist_demo.xlsx`) contains **original paraphrases** of the 21 demo Annex A controls. These paraphrases were written independently for this tool and are **not** official ISO text. See the **LEGAL_NOTICE** sheet (first tab) inside the Excel file for full details.
+- The audit checklist file (`rag/ISO27001_Audit_Checklist_demo.xlsx`) contains **original paraphrases** of 25 demo Annex A controls. These paraphrases were written independently for this tool and are **not** official ISO text. See the **LEGAL_NOTICE** sheet (first tab) inside the Excel file for full details.
 - Gap assessment questions in the checklist are the author's own work and are not ISO proprietary text.
 - To implement a certified ISMS, organizations must obtain the official ISO/IEC 27001:2022 standard directly from ISO at [https://www.iso.org/standard/82875.html](https://www.iso.org/standard/82875.html).
 
