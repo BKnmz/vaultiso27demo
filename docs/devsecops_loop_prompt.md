@@ -6,8 +6,19 @@ repo's current state. Follow these steps in order. Do not skip the no-op gate.
 
 ## Step 0 — Verify dependencies
 
-This environment has a setup script that runs `pip install -r requirements.txt` once and
-gets cached (~7 days) — see https://code.claude.com/docs/en/cloud-environments#setup-scripts.
+Use `requirements-test.txt`, NOT `requirements.txt`, for anything in this loop.
+`requirements.txt` pins `torch==2.4.1+cpu` from `--extra-index-url
+https://download.pytorch.org/whl/cpu` — that domain is not on this sandbox's network
+allowlist and installs from it fail every time (confirmed twice, not transient).
+`requirements-test.txt` is a minimal set for exactly this purpose (pytest + what
+`pipeline.py`/`rag_setup.py` import at module scope) that resolves entirely from
+regular PyPI — plain `torch==2.4.1` with no `+cpu` tag, no extra index. It was created and
+merged by an earlier run of this exact loop after diagnosing this same failure — do not
+revert to `requirements.txt` here.
+
+This environment has a setup script that runs `pip install -r requirements-test.txt` once
+and gets cached (~7 days) —
+see https://code.claude.com/docs/en/cloud-environments#setup-scripts.
 Every fire after the first should have dependencies already present. Verify cheaply instead
 of reinstalling:
 
@@ -17,12 +28,10 @@ python -c "import pytest, yaml, chromadb, sentence_transformers, torch"
 
 - If this succeeds: proceed straight to Step 1.
 - If it fails: the cache may be stale or the setup script hasn't run yet on this environment.
-  Fall back to `pip install -r requirements.txt`. If that ALSO fails (e.g. a network/proxy
-  error reaching a package index), report "Daily check: could not install dependencies,
-  environment problem — not a code issue" and STOP. Do not proceed to the no-op gate on a
-  broken environment. Do not spend more than one fallback attempt on this — a persistent
-  install failure means the environment needs reconfiguring (setup script or network access),
-  not something to retry daily.
+  Fall back to `pip install -r requirements-test.txt` (never `requirements.txt` — see above).
+  If that ALSO fails, report "Daily check: could not install dependencies, environment
+  problem — not a code issue" and STOP. Do not proceed to the no-op gate on a broken
+  environment. Do not spend more than one fallback attempt on this.
 
 ## Step 1 — No-op gate
 
