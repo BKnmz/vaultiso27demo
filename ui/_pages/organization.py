@@ -141,7 +141,7 @@ def _tab_profile() -> None:
                         f'gap:16px;align-items:center;padding:14px 20px;'
                         f'border-bottom:1px solid var(--border)">'
                         f'<div style="font-size:12px;color:var(--ink-3);font-weight:550">{lbl}</div>'
-                        f'<div style="font-size:13px;color:var(--ink)">{display[:120]}</div>'
+                        f'<div style="font-size:13px;color:var(--ink)">{_html.escape(display[:120])}</div>'
                         f'{icon("check2",14)}'
                         f'</div>'
                     )
@@ -198,13 +198,13 @@ def _tab_profile() -> None:
                             f'<div style="display:grid;grid-template-columns:160px 1fr;'
                             f'gap:16px;padding:12px 20px;border-bottom:1px solid var(--border)">'
                             f'<div style="font-size:12px;color:var(--ink-3);font-weight:550">{lbl}</div>'
-                            f'<div style="font-size:13px;color:var(--ink)">{display[:120]}</div>'
+                            f'<div style="font-size:13px;color:var(--ink)">{_html.escape(display[:120])}</div>'
                             f'</div>'
                         )
                 st.markdown(
                     f'<div class="card" style="margin-bottom:16px">'
                     f'<div class="card-head"><h3 class="card-title">Current profile</h3>'
-                    f'{pill("ok", org["name"][:30], dot=False)}</div>'
+                    f'{pill("ok", _html.escape(org["name"][:30]), dot=False)}</div>'
                     f'<div class="card-body flush">{rows_html}</div></div>',
                     unsafe_allow_html=True,
                 )
