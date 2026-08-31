@@ -141,7 +141,7 @@ def _tab_profile() -> None:
                         f'gap:16px;align-items:center;padding:14px 20px;'
                         f'border-bottom:1px solid var(--border)">'
                         f'<div style="font-size:12px;color:var(--ink-3);font-weight:550">{lbl}</div>'
-                        f'<div style="font-size:13px;color:var(--ink)">{display[:120]}</div>'
+                        f'<div style="font-size:13px;color:var(--ink)">{_html.escape(display[:120])}</div>'
                         f'{icon("check2",14)}'
                         f'</div>'
                     )
@@ -198,13 +198,13 @@ def _tab_profile() -> None:
                             f'<div style="display:grid;grid-template-columns:160px 1fr;'
                             f'gap:16px;padding:12px 20px;border-bottom:1px solid var(--border)">'
                             f'<div style="font-size:12px;color:var(--ink-3);font-weight:550">{lbl}</div>'
-                            f'<div style="font-size:13px;color:var(--ink)">{display[:120]}</div>'
+                            f'<div style="font-size:13px;color:var(--ink)">{_html.escape(display[:120])}</div>'
                             f'</div>'
                         )
                 st.markdown(
                     f'<div class="card" style="margin-bottom:16px">'
                     f'<div class="card-head"><h3 class="card-title">Current profile</h3>'
-                    f'{pill("ok", org["name"][:30], dot=False)}</div>'
+                    f'{pill("ok", _html.escape(org["name"][:30]), dot=False)}</div>'
                     f'<div class="card-body flush">{rows_html}</div></div>',
                     unsafe_allow_html=True,
                 )
@@ -806,11 +806,12 @@ def _tab_model_guide() -> None:
     for m in MODEL_GUIDE:
         recommended = (m["min_ram_gb"] <= ram)
         border = "border:2px solid var(--accent);" if recommended else ""
+        recommended_badge = "&nbsp;&nbsp;<span style='font-size:10px;background:var(--accent);color:white;border-radius:4px;padding:1px 6px'>recommended</span>" if recommended else ""
         cards_html += (
             f'<div class="card" style="padding:0;{border}">'
             f'<div class="card-body">'
             f'<div class="mono" style="font-size:13px;font-weight:500;color:var(--ink)">{m["Model"]}'
-            f'{"&nbsp;&nbsp;<span style=\'font-size:10px;background:var(--accent);color:white;border-radius:4px;padding:1px 6px\'>recommended</span>" if recommended else ""}'
+            f'{recommended_badge}'
             f'</div>'
             f'<div style="font-size:12px;color:var(--ink-3);margin:4px 0 12px">{m["Best for"]}</div>'
             f'<div class="meta-row"><span class="k">VRAM</span><span class="v mono">{m["VRAM"]}</span></div>'
