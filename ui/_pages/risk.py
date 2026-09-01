@@ -134,8 +134,17 @@ def render() -> None:
                 else:
                     score = likelihood * impact
                     refs = [r.strip() for r in control_refs.split(",") if r.strip()]
+                    # Derive next ID from maximum existing numeric suffix
+                    max_num = 0
+                    for risk in data:
+                        if isinstance(risk.get("id"), str) and risk["id"].startswith("R"):
+                            try:
+                                num = int(risk["id"][1:])
+                                max_num = max(max_num, num)
+                            except ValueError:
+                                pass
                     new_risk = {
-                        "id":             f"R{len(data)+1:03d}",
+                        "id":             f"R{max_num+1:03d}",
                         "asset_ref":      asset_ref.strip(),
                         "threat":         threat.strip(),
                         "vulnerability":  vulnerability.strip(),
