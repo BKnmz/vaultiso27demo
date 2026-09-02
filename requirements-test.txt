@@ -9,8 +9,12 @@
 # "+cpu" local version has no fallback on PyPI so the whole install dies on it.
 # Plain torch==2.4.1 resolves from PyPI and is all sentence-transformers needs.
 #
-# Excluded vs requirements.txt: streamlit, pandas, pypdf, PyGithub — imported
-# only under ui/, which the test suite never touches.
+# Excluded vs requirements.txt: pandas, pypdf, PyGithub — imported only under ui/,
+# which the test suite never touches. Streamlit and pydantic-ai-slim are included
+# because tests/test_get_review_verdict.py, tests/test_org_extraction.py,
+# tests/test_org_profile_schema.py import ui/core.py (which does `import streamlit`
+# at module scope), and tests/test_critic.py imports critic.py which imports
+# pydantic-ai at module scope.
 
 pytest>=8.0
 
@@ -19,6 +23,12 @@ pytest>=8.0
 torch==2.4.1
 chromadb==1.5.8
 sentence-transformers==3.0.1
+
+# ui/core.py imports streamlit at module scope; tests import ui/core.py.
+streamlit==1.36.0
+
+# critic.py imports pydantic_ai at module scope; tests import critic.py.
+pydantic-ai-slim[openai]==2.9.0
 
 openpyxl==3.1.2
 jinja2==3.1.4

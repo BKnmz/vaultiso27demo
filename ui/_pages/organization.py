@@ -806,11 +806,12 @@ def _tab_model_guide() -> None:
     for m in MODEL_GUIDE:
         recommended = (m["min_ram_gb"] <= ram)
         border = "border:2px solid var(--accent);" if recommended else ""
+        _recommended_badge = '&nbsp;&nbsp;<span style="font-size:10px;background:var(--accent);color:white;border-radius:4px;padding:1px 6px">recommended</span>'
         cards_html += (
             f'<div class="card" style="padding:0;{border}">'
             f'<div class="card-body">'
             f'<div class="mono" style="font-size:13px;font-weight:500;color:var(--ink)">{m["Model"]}'
-            f'{"&nbsp;&nbsp;<span style=\'font-size:10px;background:var(--accent);color:white;border-radius:4px;padding:1px 6px\'>recommended</span>" if recommended else ""}'
+            f'{_recommended_badge if recommended else ""}'
             f'</div>'
             f'<div style="font-size:12px;color:var(--ink-3);margin:4px 0 12px">{m["Best for"]}</div>'
             f'<div class="meta-row"><span class="k">VRAM</span><span class="v mono">{m["VRAM"]}</span></div>'
