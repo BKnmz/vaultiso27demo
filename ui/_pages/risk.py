@@ -5,6 +5,7 @@ import uuid
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import html as _html
 import streamlit as st
 from datetime import datetime
 
@@ -200,12 +201,12 @@ def render() -> None:
         s_color = _score_color(score)
 
         cols = st.columns([1, 3, 3, 2, 1, 1, 1, 1, 2])
-        cols[0].markdown(f'<span class="mono" style="font-size:12px">{risk.get("id","")}</span>', unsafe_allow_html=True)
-        cols[1].markdown(f'<span style="font-size:13px;font-weight:500">{risk.get("threat","")}</span>', unsafe_allow_html=True)
-        cols[2].markdown(f'<span style="font-size:12.5px;color:var(--ink-2)">{risk.get("asset_ref","") or "—"}</span>', unsafe_allow_html=True)
-        cols[3].markdown(f'<span style="font-size:12.5px">{risk.get("treatment","")}</span>', unsafe_allow_html=True)
-        cols[4].markdown(f'<span style="font-size:13px">{risk.get("likelihood",0)}</span>', unsafe_allow_html=True)
-        cols[5].markdown(f'<span style="font-size:13px">{risk.get("impact",0)}</span>', unsafe_allow_html=True)
+        cols[0].markdown(f'<span class="mono" style="font-size:12px">{_html.escape(str(risk.get("id","")))}</span>', unsafe_allow_html=True)
+        cols[1].markdown(f'<span style="font-size:13px;font-weight:500">{_html.escape(risk.get("threat",""))}</span>', unsafe_allow_html=True)
+        cols[2].markdown(f'<span style="font-size:12.5px;color:var(--ink-2)">{_html.escape(risk.get("asset_ref","")) or "—"}</span>', unsafe_allow_html=True)
+        cols[3].markdown(f'<span style="font-size:12.5px">{_html.escape(risk.get("treatment",""))}</span>', unsafe_allow_html=True)
+        cols[4].markdown(f'<span style="font-size:13px">{_html.escape(str(risk.get("likelihood",0)))}</span>', unsafe_allow_html=True)
+        cols[5].markdown(f'<span style="font-size:13px">{_html.escape(str(risk.get("impact",0)))}</span>', unsafe_allow_html=True)
         cols[6].markdown(
             f'<span style="font-size:13px;font-weight:600;color:{s_color}">{score}</span>',
             unsafe_allow_html=True,

@@ -2,8 +2,6 @@
 
 CSS = """
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter+Tight:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
-
 /* ── Streamlit chrome cleanup ── */
 #MainMenu, footer, header { visibility: hidden; }
 [data-testid="stDecoration"] { display: none !important; }
