@@ -3,6 +3,13 @@ VaultISO27 — backend core: constants, data helpers, export functions.
 Imported by app.py (routing shell) and all page modules.
 """
 __version__ = "0.5.0"
+import os
+
+# Force offline mode before any HuggingFace imports to prevent network
+# calls to huggingface.co on model load.
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+os.environ.setdefault("HF_DATASETS_OFFLINE", "1")
+
 import io
 import json
 import platform
